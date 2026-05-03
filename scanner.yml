@@ -1,0 +1,124 @@
+name: NSE Live Scanner v3.3
+
+on:
+  schedule:
+    # ── DAILY SCANS (full scan, ~20 min) ──────────────────────
+    # 8:00 AM IST  = 2:30 UTC
+    - cron: "30 2 * * 1-5"
+    # 12:30 PM IST = 7:00 UTC
+    - cron: "0 7 * * 1-5"
+    # 4:30 PM IST  = 11:00 UTC
+    - cron: "0 11 * * 1-5"
+
+    # ── 30-MIN SCANS during market hours (9:15 AM – 3:30 PM IST) ──
+    # 9:15  AM IST = 3:45  UTC
+    - cron: "45 3 * * 1-5"
+    # 9:45  AM IST = 4:15  UTC
+    - cron: "15 4 * * 1-5"
+    # 10:15 AM IST = 4:45  UTC
+    - cron: "45 4 * * 1-5"
+    # 10:45 AM IST = 5:15  UTC
+    - cron: "15 5 * * 1-5"
+    # 11:15 AM IST = 5:45  UTC
+    - cron: "45 5 * * 1-5"
+    # 11:45 AM IST = 6:15  UTC
+    - cron: "15 6 * * 1-5"
+    # 12:15 PM IST = 6:45  UTC
+    - cron: "45 6 * * 1-5"
+    # 12:45 PM IST = 7:15  UTC
+    - cron: "15 7 * * 1-5"
+    # 1:15  PM IST = 7:45  UTC
+    - cron: "45 7 * * 1-5"
+    # 1:45  PM IST = 8:15  UTC
+    - cron: "15 8 * * 1-5"
+    # 2:15  PM IST = 8:45  UTC
+    - cron: "45 8 * * 1-5"
+    # 2:45  PM IST = 9:15  UTC
+    - cron: "15 9 * * 1-5"
+    # 3:15  PM IST = 9:45  UTC
+    - cron: "45 9 * * 1-5"
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode"
+        required: true
+        type: choice
+        options: [daily, halfhour, test, healthcheck]
+
+# Allow workflow to commit watchlist.json back to repo
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── Determine mode ─────────────────────────────────────────
+      - name: Set mode
+        id: mode
+        run: |
+          if [ -n "${{ github.event.inputs.mode }}" ]; then
+            echo "MODE=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
+
+          # Daily scan times (UTC): 2:30, 7:00, 11:00
+          elif [ "${{ github.event.schedule }}" = "30 2 * * 1-5" ] || \
+               [ "${{ github.event.schedule }}" = "0 7 * * 1-5" ]  || \
+               [ "${{ github.event.schedule }}" = "0 11 * * 1-5" ]; then
+            echo "MODE=daily" >> $GITHUB_OUTPUT
+
+          else
+            echo "MODE=halfhour" >> $GITHUB_OUTPUT
+          fi
+
+      # ── Run scanner ────────────────────────────────────────────
+      - name: Run scanner
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          python scanner.py --${{ steps.mode.outputs.MODE }} --telegram
+
+      # ── Commit watchlist.json so 30-min runs can see daily results ──
+      - name: Commit watchlist
+        if: steps.mode.outputs.MODE == 'daily'
+        run: |
+          git config user.name  "NSE Scanner Bot"
+          git config user.email "scanner@noreply.github.com"
+          git add watchlist.json || true
+          git diff --staged --quiet || git commit -m "watchlist: $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push || true
+
+      # ── Upload artifacts ────────────────────────────────────────
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.mode.outputs.MODE }}-${{ github.run_number }}
+          path: |
+            output/
+            logs/
+            signals.db
+            watchlist.json
+          retention-days: 30
