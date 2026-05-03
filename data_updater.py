@@ -1051,6 +1051,20 @@ def main():
         stocks = load_universe()
         run_eod_update(stocks)
         update_sectors()
+        # Fetch today's NSE bulk deals
+        try:
+            from fundamentals import fetch_nse_bulk_deals, batch_refresh_fundamentals
+            log.info("Fetching NSE bulk deals...")
+            fetch_nse_bulk_deals()
+            # Refresh fundamentals for watchlist stocks (priority)
+            wl_stocks = load_watchlist()
+            if wl_stocks:
+                log.info(f"Refreshing fundamentals for {len(wl_stocks)} watchlist stocks")
+                batch_refresh_fundamentals(wl_stocks, workers=4)
+        except ImportError:
+            log.warning("fundamentals.py not found — skipping bulk deals + fund refresh")
+        except Exception as e:
+            log.warning(f"Bulk deals/fundamentals: {e}")
         return
 
     if args.bootstrap:
