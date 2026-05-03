@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NSE Live Pattern Scanner v4.2
+NSE Live Pattern Scanner v4.3
 ==============================
 Fixes from v3.2 (what you saw failing in GitHub Actions):
   1. DB PERSISTENCE — GitHub Actions is stateless. Each run is a fresh container.
@@ -43,6 +43,22 @@ import pandas as pd
 import numpy as np
 from scipy.signal import find_peaks
 from scipy.stats import percentileofscore
+from functools import lru_cache as _lru
+# fundamentals module — imported lazily to avoid circular imports
+try:
+    from fundamentals import (get_fundamentals, get_bulk_deals_today,
+                               promoter_quality_score, earnings_quality_score,
+                               is_low_float, has_insider_activity,
+                               calc_piotroski)
+    _FUND_MODULE = True
+except ImportError:
+    _FUND_MODULE = False
+    def get_fundamentals(sym, **kw): return {}
+    def get_bulk_deals_today(): return {}
+    def promoter_quality_score(f): return 0.5
+    def earnings_quality_score(f): return 0.5
+    def is_low_float(f): return False
+    def has_insider_activity(*a): return False, None, None
 
 # ================================================================
 # PATHS & LOGGING
@@ -74,8 +90,10 @@ log = logging.getLogger("scanner")
 # CONFIG
 # ================================================================
 NIFTY_SYM    = "^NSEI"
-PERIOD_DAILY = "1y"
-STALE_DAYS   = 5     # re-fetch full history if cache is older than this
+PERIOD_DAILY = "2y"   # extended: 500 bars daily now available
+STALE_DAYS   = 5
+WEEKLY_WINDOWS = [26, 52, 104, 156]   # weekly bar windows (6mo/1yr/2yr/3yr)
+MONTHLY_WINDOWS = [12, 24, 36, 60]    # monthly bar windows     # re-fetch full history if cache is older than this
 PERIOD_QUICK = "3mo"
 MAX_WORKERS  = 4
 DL_RETRIES   = 3
@@ -179,6 +197,16 @@ def get_db():
             recommendation TEXT,
             m1 REAL, m2 REAL, m3 REAL, m4 REAL, m5 REAL,
             pos_shares INTEGER DEFAULT 0, pos_value REAL DEFAULT 0,
+            pattern_detail TEXT, promoter_score REAL, earnings_score REAL,
+            low_float INTEGER DEFAULT 0, insider_deal INTEGER DEFAULT 0,
+            deal_value_cr REAL, deal_type TEXT,
+            pe_ratio REAL, pb_ratio REAL, roe REAL, roce REAL,
+            revenue_growth_yoy REAL, revenue_growth_3yr REAL,
+            promoter_pct REAL, pledging_pct REAL, debt_equity REAL,
+            free_float_pct REAL, piotroski_score INTEGER,
+            eps_accelerating INTEGER DEFAULT 0,
+            rsi_14 REAL, atr_pct REAL, above_200ma_wk INTEGER DEFAULT 0,
+            weekly_trend TEXT, monthly_trend TEXT,
             notes TEXT,
             created_at TEXT DEFAULT (datetime('now','localtime'))
         );
@@ -937,6 +965,43 @@ def calc_position_size(entry: float, stop: float) -> dict:
     shares = int((PORTFOLIO_VALUE * RISK_PCT_PER_TRADE) / (entry - stop))
     return {"shares": shares, "value": round(shares * entry, 0)}
 
+
+
+def _get_pattern_winrate(con, pattern: str, min_n: int = 10) -> float | None:
+    """Get historical 5-day win rate for a pattern from signal_outcomes."""
+    try:
+        row = con.execute(
+            "SELECT count(*) as n, "
+            "sum(case when return_5d > 0 then 1 else 0 end) as wins "
+            "FROM signal_outcomes WHERE pattern=? AND return_5d IS NOT NULL",
+            (pattern,)
+        ).fetchone()
+        if row and row[0] >= min_n:
+            return round(row[1]/row[0]*100, 0)
+    except Exception:
+        pass
+    return None
+
+def _calc_rsi14(close: list | None, period: int = 14) -> float | None:
+    """RSI using Wilder's smoothing method."""
+    if close is None or len(close) < period + 1:
+        return None
+    try:
+        deltas = np.diff(close[-(period*2):])
+        gains  = np.where(deltas > 0, deltas, 0.0)
+        losses = np.where(deltas < 0, -deltas, 0.0)
+        avg_gain = np.mean(gains[:period])
+        avg_loss = np.mean(losses[:period])
+        for i in range(period, len(gains)):
+            avg_gain = (avg_gain*(period-1) + gains[i]) / period
+            avg_loss = (avg_loss*(period-1) + losses[i]) / period
+        if avg_loss == 0:
+            return 100.0
+        rs = avg_gain / avg_loss
+        return round(100 - 100/(1+rs), 1)
+    except Exception:
+        return None
+
 def identify_leg(close, bz):
     if len(close) < 50 or not bz: return "Unknown"
     if close[-1] < bz*0.98: return "Pre-breakout"
@@ -1463,12 +1528,345 @@ def det_vwap_reclaim(c, v, vwap=None):
                 bottom=round(float(vwap*0.995),2), last=round(float(c[-1]),2), vs=vs_val,
                 m1=round(gain*100,2), m2=vs_val, m3=round(vwap,2), m4=None, m5=None)
 
+
+# ================================================================
+# NEW PATTERN DETECTORS — v4.3
+# ================================================================
+
+def det_saucer_bottom(c, v):
+    """
+    Saucer Bottom (O'Neil) — very gradual curve over 3-7 months.
+    Shallower and wider than cup. Requires 120+ bars.
+    Volume must contract through saucer, expand on right side.
+    """
+    n = len(c)
+    if n < 120: return None
+    s = pd.Series(c).rolling(10, min_periods=1).mean().values
+    ti = int(np.argmin(s))
+    if not (n*0.25 <= ti <= n*0.75): return None
+    pk = max(s[:ti+1].max(), s[ti:].max())
+    tr = s[ti]
+    depth = (pk - tr) / pk
+    # Saucer is shallower than cup: 5-30% depth
+    if not (0.05 <= depth <= 0.30): return None
+    # Must be gradual — std of middle section should be low
+    mid = s[max(0, ti-20):ti+20]
+    flatness = np.std(mid) / np.mean(mid) if np.mean(mid) > 0 else 1
+    if flatness > 0.04: return None  # too jagged = cup not saucer
+    # Width check — saucer should be wider relative to depth
+    width_ratio = (n - ti) / (ti + 1)
+    if not (0.3 <= width_ratio <= 2.0): return None
+    # Volume contracting through middle, expanding on right
+    vol_ok = True
+    if v is not None and n >= 40:
+        left_vol = np.mean(v[:ti//2]) if ti > 10 else v[0]
+        mid_vol  = np.mean(v[ti-10:ti+10]) if ti > 10 else v[ti]
+        right_vol = np.mean(v[ti+1:]) if ti < n-5 else v[-1]
+        vol_ok = mid_vol < left_vol and right_vol > mid_vol
+    vs = vsurge(v, n)
+    bo = c[-1] >= pk * 0.98 and (vs is not None and vs >= 1.2)
+    try:
+        cx = np.arange(n); cf = np.polyfit(cx, s, 2)
+        r2 = 1 - np.sum((s - np.polyval(cf,cx))**2) / np.sum((s-np.mean(s))**2)
+        if cf[0] <= 0 or r2 < 0.40: return None
+    except: return None
+    return dict(pattern="SaucerBottom",
+                status="Breakout Ready" if bo else "Forming",
+                quality=round((r2 - flatness) * (1.1 if vol_ok else 0.8), 3),
+                bz=round(float(pk),2), bottom=round(float(tr),2),
+                last=round(float(c[-1]),2), vs=vs,
+                m1=round(depth*100,2), m2=round(flatness*100,2),
+                m3=round(width_ratio,2), m4=round(r2,3), m5=None)
+
+
+def det_power_trend(c, v):
+    """
+    Kell's Power Trend: 10 EMA > 20 EMA > 50 SMA > 200 SMA, all rising, 3+ sessions.
+    This is a REGIME detector, not a pattern. When active = buy any pullback.
+    """
+    n = len(c)
+    if n < 210: return None
+    s = pd.Series(c)
+    ema10  = s.ewm(span=10, adjust=False).mean().values
+    ema20  = s.ewm(span=20, adjust=False).mean().values
+    sma50  = s.rolling(50).mean().values
+    sma200 = s.rolling(200).mean().values
+    # Check last 3 bars have maintained power trend alignment
+    for i in [-1, -2, -3]:
+        if not (ema10[i] > ema20[i] > sma50[i] > sma200[i]):
+            return None
+    # All MAs rising (compare to 3 bars ago)
+    if not (ema10[-1] > ema10[-4] and ema20[-1] > ema20[-4] and
+            sma50[-1] > sma50[-4] and sma200[-1] > sma200[-4]):
+        return None
+    # Quality: how tight are the MAs (closer = stronger trend)
+    spread = (ema10[-1] - sma200[-1]) / sma200[-1]
+    if spread > 0.40: return None  # too extended from 200
+    vs = vsurge(v, n)
+    quality = round(1 - spread, 3)
+    return dict(pattern="PowerTrend",
+                status="Power Trend Active",
+                quality=quality,
+                bz=round(float(ema20[-1]),2),  # pullback to 20 EMA = entry
+                bottom=round(float(sma50[-1]),2),
+                last=round(float(c[-1]),2), vs=vs,
+                m1=round((c[-1]-sma200[-1])/sma200[-1]*100,2),
+                m2=round((ema10[-1]-ema20[-1])/ema20[-1]*100,2),
+                m3=round(spread*100,2), m4=None, m5=None)
+
+
+def det_weekly_vcp(c, v):
+    """
+    Weekly VCP (Minervishi's favourite setup).
+    Same logic as daily VCP but on weekly bars.
+    Windows [26,52,104] weeks applied externally.
+    Final contraction must be under 5% depth.
+    """
+    # Same as det_vcp but with tighter final contraction for weekly
+    n = len(c)
+    if n < 20: return None
+    atr = np.mean(np.abs(np.diff(c))) if n > 1 else np.mean(c)*0.01
+    prom = max(atr*1.5, np.mean(c)*0.01)
+    try:
+        highs, _ = find_peaks(c, prominence=prom, distance=3)
+        lows, _  = find_peaks(-c, prominence=prom, distance=3)
+    except: return None
+    if len(highs) < 2 or len(lows) < 2: return None
+    contractions = []
+    hl = list(highs) + [n]
+    for i, hi in enumerate(hl[:-1]):
+        nh = hl[i+1]
+        nl = lows[(lows > hi) & (lows < nh)]
+        lo = nl[0] if len(nl)>0 else (hi + int(np.argmin(c[hi:nh])) if nh-hi>=3 else -1)
+        if lo < 0 or lo >= n: continue
+        depth = (c[hi]-c[lo])/c[hi]
+        if depth < 0.03: continue
+        contractions.append((hi, lo, depth))
+    if len(contractions) < 2: return None  # weekly: 2 contractions enough
+    depths = [ct[2] for ct in contractions]
+    if not all(depths[i] <= depths[i-1]*0.85 for i in range(1,len(depths))): return None
+    # Weekly: final contraction STRICT < 5%
+    if depths[-1] > 0.05: return None
+    if contractions[-1][1] < n*0.5: return None
+    pivot = float(np.max(c[highs]))
+    vs = vsurge(v, n)
+    bo = c[-1] >= pivot*0.98 and (vs is not None and vs >= 1.5)
+    return dict(pattern="WeeklyVCP",
+                status="Breakout Ready" if bo else "Forming",
+                quality=round(1 - depths[-1], 3),
+                bz=round(pivot,2), bottom=round(float(c[contractions[-1][1]]),2),
+                last=round(float(c[-1]),2), vs=vs,
+                m1=round(depths[0]*100,2), m2=round(depths[-1]*100,2),
+                m3=len(contractions), m4=None, m5=None)
+
+
+def det_weekly_flat(c, v):
+    """
+    Weekly Flat Base — stock consolidates within 15% over 5-15 weeks.
+    O'Neil: flat base after 30%+ uptrend. Very tight = very bullish.
+    """
+    n = len(c)
+    if n < 10: return None
+    best = None
+    for bl in range(5, min(20, n)+1):
+        base = c[-bl:]
+        bh, blo = np.max(base), np.min(base)
+        br = (bh - blo) / bh if bh > 0 else 1
+        if br > 0.15: break  # weekly flat base: max 15% range
+        # Must have prior uptrend of 30%+ before the base
+        bs = n - bl
+        if bs < 10: continue
+        pre = c[max(0,bs-26):bs]  # last 6 months before base
+        if len(pre) < 5: continue
+        tg = (pre[-1] - np.min(pre)) / np.min(pre) if np.min(pre) > 0 else 0
+        if tg < 0.30: continue  # need 30%+ uptrend before
+        if best is None or br < best["br"]:
+            best = dict(bl=bl, bh=bh, blo=blo, br=br, tg=tg)
+    if best is None: return None
+    vs = vsurge(v, n)
+    bo = c[-1] >= best["bh"] * 0.99 and (vs is not None and vs >= 1.2)
+    return dict(pattern="WeeklyFlatBase",
+                status="Breakout Ready" if bo else "Forming",
+                quality=round(best["tg"] - best["br"], 3),
+                bz=round(float(best["bh"]),2), bottom=round(float(best["blo"]),2),
+                last=round(float(c[-1]),2), vs=vs,
+                m1=round(best["br"]*100,2), m2=round(best["tg"]*100,2),
+                m3=best["bl"], m4=None, m5=None)
+
+
+def det_monthly_stage2(c, v):
+    """
+    Monthly Stage 2 (Weinstein) — stock above rising 10-month MA.
+    The longest-term trend filter. Monthly Stage 2 stocks = safest buys.
+    Windows [24,36,60] months applied externally.
+    """
+    n = len(c)
+    if n < 15: return None
+    ma10 = np.mean(c[-min(10,n):])
+    ma10_prev = np.mean(c[-min(10,n)-3:-3]) if n >= 13 else ma10
+    # Must be above MA and MA must be rising
+    if c[-1] <= ma10: return None
+    if ma10 <= ma10_prev * 0.99: return None  # MA not rising
+    # 200-bar equivalent on monthly = ~16 years — use available
+    ma_long = np.mean(c[-min(n,24):])  # 2yr MA on monthly
+    above_long = c[-1] > ma_long
+    # How far into Stage 2
+    gain_from_ma = (c[-1] - ma10) / ma10
+    vs = vsurge(v, n)
+    return dict(pattern="MonthlyStage2",
+                status="Monthly Stage 2",
+                quality=round(gain_from_ma * (1.1 if above_long else 0.9), 3),
+                bz=round(float(ma10),2),
+                bottom=round(float(ma10 * 0.95),2),
+                last=round(float(c[-1]),2), vs=vs,
+                m1=round(gain_from_ma*100,2),
+                m2=round((ma10-ma10_prev)/ma10_prev*100,2) if ma10_prev>0 else None,
+                m3=1 if above_long else 0, m4=None, m5=None)
+
+
+def det_earnings_base(c, v):
+    """
+    Earnings Base (Minervishi) — post-EP tight consolidation.
+    After a gap-up (EP), stock consolidates tightly for 3-8 weeks.
+    The breakout from this base has highest win rate (fundamental already confirmed).
+    Needs recent price gap + subsequent tight base.
+    """
+    n = len(c)
+    if n < 15: return None
+    # Look for gap-up in last 60 bars
+    gap_idx = None
+    for i in range(max(0, n-60), n-8):
+        if i < 1: continue
+        gap = (c[i] - c[i-1]) / c[i-1] if c[i-1] > 0 else 0
+        if gap >= 0.05:  # 5%+ gap
+            gap_idx = i
+            break
+    if gap_idx is None: return None
+    # Check tight consolidation after gap
+    post_gap = c[gap_idx:]
+    if len(post_gap) < 6: return None
+    ph, pl = np.max(post_gap), np.min(post_gap)
+    base_range = (ph - pl) / ph if ph > 0 else 1
+    if base_range > 0.15: return None  # must be tight < 15%
+    # Must be holding above gap level
+    if c[-1] < c[gap_idx] * 0.95: return None
+    vs = vsurge(v, n)
+    bo = c[-1] >= ph * 0.99 and (vs is not None and vs >= 1.3)
+    return dict(pattern="EarningsBase",
+                status="Breakout Ready" if bo else "Tight Base",
+                quality=round((0.05 + (c[gap_idx]-c[gap_idx-1])/c[gap_idx-1]) - base_range, 3),
+                bz=round(float(ph),2), bottom=round(float(pl),2),
+                last=round(float(c[-1]),2), vs=vs,
+                m1=round((c[gap_idx]-c[gap_idx-1])/c[gap_idx-1]*100 if gap_idx>0 and c[gap_idx-1]>0 else 0,2),
+                m2=round(base_range*100,2), m3=n-gap_idx,
+                m4=None, m5=None)
+
+
+def det_ascending_base(c, v):
+    """
+    Ascending Base (O'Neil) — series of 3 bases, each base higher than prior.
+    Each base 10-20% range. Stock moves up between bases.
+    Very bullish: stock being accumulated, not distributed.
+    """
+    n = len(c)
+    if n < 40: return None
+    # Find 3 local highs and 3 local lows in sequence
+    try:
+        pks, _ = find_peaks(c, prominence=np.mean(c)*0.03, distance=5)
+        trs, _ = find_peaks(-c, prominence=np.mean(c)*0.03, distance=5)
+    except: return None
+    if len(pks) < 3 or len(trs) < 3: return None
+    # Check ascending: each trough higher than prior trough
+    tr_c = c[trs]
+    pk_c = c[pks]
+    # Last 3 troughs ascending
+    if not all(tr_c[-3+i] < tr_c[-3+i+1] for i in range(2)):
+        return None
+    # Last 3 peaks ascending
+    if not all(pk_c[-3+i] < pk_c[-3+i+1] for i in range(2)):
+        return None
+    # Each base range should be 10-20%
+    last_base_range = (pk_c[-1] - tr_c[-1]) / pk_c[-1] if pk_c[-1]>0 else 1
+    if not (0.05 <= last_base_range <= 0.25): return None
+    vs = vsurge(v, n)
+    bo = c[-1] >= pk_c[-1] * 0.99 and (vs is not None and vs >= 1.2)
+    return dict(pattern="AscendingBase",
+                status="Breakout Ready" if bo else "Forming",
+                quality=round(tr_c[-1]/tr_c[-3] - 1, 3),  # how much each base higher
+                bz=round(float(pk_c[-1]),2), bottom=round(float(tr_c[-1]),2),
+                last=round(float(c[-1]),2), vs=vs,
+                m1=round(last_base_range*100,2),
+                m2=round((tr_c[-1]-tr_c[-3])/tr_c[-3]*100 if tr_c[-3]>0 else 0,2),
+                m3=len(pks), m4=len(trs), m5=None)
+
+
+def det_rs_new_high(c, v, nc=None):
+    """
+    RS New High — stock making 52-week high while sector/market is NOT.
+    Most powerful confirmation of a sector leader.
+    Requires market close array nc for comparison.
+    """
+    n = len(c)
+    if n < 252: return None
+    # Stock at/near 52-week high
+    hi52 = np.max(c[-252:])
+    if (hi52 - c[-1]) / hi52 > 0.03: return None  # must be within 3% of high
+    # Market NOT at 52-week high
+    if nc is not None and len(nc) >= 252:
+        mkt_hi52 = np.max(nc[-252:])
+        mkt_near_high = (mkt_hi52 - nc[-1]) / mkt_hi52 < 0.05
+        if mkt_near_high: return None  # market also at high = not a leader
+    # RS calc: stock 1yr return vs market 1yr return
+    stock_ret = (c[-1] - c[-252]) / c[-252] if c[-252] > 0 else 0
+    mkt_ret = (nc[-1] - nc[-252]) / nc[-252] if nc is not None and len(nc)>=252 and nc[-252]>0 else 0
+    rs_vs_mkt = stock_ret - mkt_ret
+    if rs_vs_mkt < 0.10: return None  # must outperform by 10%+
+    vs = vsurge(v, n)
+    return dict(pattern="RSNewHigh",
+                status="RS Leader",
+                quality=round(rs_vs_mkt, 3),
+                bz=round(float(hi52),2), bottom=round(float(c[-52:].min()),2),
+                last=round(float(c[-1]),2), vs=vs,
+                m1=round(stock_ret*100,2), m2=round(mkt_ret*100,2),
+                m3=round(rs_vs_mkt*100,2), m4=None, m5=None)
+
+
+def det_low_float_momentum(c, v, fund=None):
+    """
+    Low Float Momentum (Qullamaggie) — ADR>5% + float<20% + momentum burst.
+    Low float stocks with high ADR make explosive moves.
+    """
+    n = len(c)
+    if n < 20 or v is None: return None
+    # ADR > 5%
+    adr = calc_adr(c)
+    if adr < 5.0: return None
+    # Low float check from fundamentals
+    if fund and not is_low_float(fund): return None
+    # Momentum: up 3%+ today or in last 3 days
+    if c[-2] <= 0: return None
+    day_gain = (c[-1] - c[-2]) / c[-2]
+    if day_gain < 0.03: return None
+    # Volume surge
+    vs = vsurge(v, n)
+    if vs is None or vs < 1.5: return None
+    # Above 50 MA
+    ma50 = np.mean(c[-min(50,n):])
+    if c[-1] < ma50: return None
+    return dict(pattern="LowFloatMomentum",
+                status="Burst Active",
+                quality=round(day_gain * vs, 4),
+                bz=round(float(c[-1]),2), bottom=round(float(c[-2]),2),
+                last=round(float(c[-1]),2), vs=vs,
+                m1=round(adr,2), m2=round(day_gain*100,2),
+                m3=vs, m4=None, m5=None)
+
 DETECTORS = {
-    "CupHandle": (det_cup, [60,80,120,180,250]),
-    "VCP": (det_vcp, [60,80,120,180,250]),
-    "FlatBase": (det_fb, [40,60,80,120,180]),
-    "InvHS": (det_ihs, [60,80,120,180,250]),
-    "DoubleBottom": (det_dbot, [40,60,100,150,200]),
+    "CupHandle": (det_cup, [60,80,120,180,250,350,500]),
+    "VCP": (det_vcp, [60,80,120,180,250,350,500]),
+    "FlatBase": (det_fb, [40,60,80,120,180,250,350]),
+    "InvHS": (det_ihs, [60,80,120,180,250,350,500]),
+    "DoubleBottom": (det_dbot, [40,60,100,150,200,300,400]),
     "AscTriangle": (det_asctri, [30,50,80,120,180]),
     "BullFlag": (det_flag, [15,20,30,40,50,60]),
     "FallingWedge": (det_fwedge, [30,50,80,120]),
@@ -1476,9 +1874,19 @@ DETECTORS = {
     "EpisodicPivot": (det_epivot, [30]),
     "PocketPivot": (det_ppivot, [30]),
     "Anticipation": (det_anticipation, [30,50]),
-    "Stage2Breakout": (det_stage2bo, [180]),
+    "Stage2Breakout": (det_stage2bo, [180,250,350,500]),
     "ORB": (det_orb, [4, 6, 8]),
     "VWAPReclaim": (det_vwap_reclaim, [10, 20, 30]),
+    # New patterns v4.3
+    "SaucerBottom":    (det_saucer_bottom, [120, 180, 250, 350]),
+    "PowerTrend":      (det_power_trend,   [210, 300, 500]),
+    "WeeklyVCP":       (det_weekly_vcp,    [26, 52, 104]),    # weekly bars
+    "WeeklyFlatBase":  (det_weekly_flat,   [8, 13, 20]),      # weekly bars
+    "MonthlyStage2":   (det_monthly_stage2,[24, 36, 60]),     # monthly bars
+    "EarningsBase":    (det_earnings_base, [30, 50, 80]),
+    "AscendingBase":   (det_ascending_base,[60, 100, 150]),
+    "RSNewHigh":       (det_rs_new_high,   [252, 500]),
+    "LowFloatMomentum":(det_low_float_momentum,[30, 50]),
 }
 
 # ================================================================
@@ -1486,12 +1894,20 @@ DETECTORS = {
 # ================================================================
 def scan_stock(sym, nifty_d, ftd_active, market_trend,
                period=PERIOD_DAILY, detector_filter=None, aggression=2):
-    fund = dl_fund(sym)
+    fund = dl_fund_cached(sym)   # v4.3: full multi-source fundamentals
     fund_ok = fund.get("_fund_ok", False)
     cc, cr = cap_class(fund.get("marketCap"))
     rows = []; patterns_found = set()
 
-    df = dl_cached(sym, period)  # uses incremental cache
+    # v4.3 enriched scores
+    prom_score = promoter_quality_score(fund) if fund_ok else 0.5
+    earn_score = earnings_quality_score(fund) if fund_ok else 0.5
+    low_float  = is_low_float(fund) if fund_ok else False
+    _bulk = get_bulk_deals_today()
+    has_deal, deal_val_cr, deal_type = has_insider_activity(
+        sym.replace(".NS",""), _bulk)
+
+    df = read_cache(sym, "1d") or dl_cached(sym, period)
     if df is None or len(df) < 30: return rows, fund_ok
 
     close = df["Close"].values.astype(float)
@@ -1520,6 +1936,14 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
     else:
         nc = nr = None
 
+    # v4.3: weekly + monthly data for extended pattern detection
+    df_wk = read_cache(sym, "1wk", limit=200)
+    df_mo = read_cache(sym, "1mo", limit=72)
+    close_wk = df_wk["Close"].values.astype(float) if df_wk is not None and len(df_wk) > 10 else None
+    vol_wk   = df_wk["Volume"].values.astype(float) if df_wk is not None and "Volume" in df_wk.columns else None
+    close_mo = df_mo["Close"].values.astype(float) if df_mo is not None and len(df_mo) > 10 else None
+    vol_mo   = df_mo["Volume"].values.astype(float) if df_mo is not None and "Volume" in df_mo.columns else None
+
     cs, completeness = canslim_score(close, vol, fund, nc, nr)
     stage = check_weinstein_stage(close)
     vdu = check_volume_dryup(vol)
@@ -1529,7 +1953,25 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
     dets = {k:v for k,v in DETECTORS.items()
             if detector_filter is None or k in detector_filter}
 
-    for pat, (detector, windows) in dets.items():
+    # Build data sources: daily + weekly + monthly
+    _tf_sources = [("Daily", close, vol, open_p, high_p, low_p)]
+    if close_wk is not None:
+        _tf_sources.append(("Weekly", close_wk, vol_wk, None, None, None))
+    if close_mo is not None:
+        _tf_sources.append(("Monthly", close_mo, vol_mo, None, None, None))
+
+    for _tf_label, _close, _vol, _open, _high, _low in _tf_sources:
+      # Only run weekly/monthly specific patterns on their respective TFs
+      _tf_pats = {
+          "Daily":   lambda p: p not in ("WeeklyVCP","WeeklyFlatBase","MonthlyStage2"),
+          "Weekly":  lambda p: p in ("WeeklyVCP","WeeklyFlatBase","CupHandle","VCP",
+                                      "FlatBase","InvHS","AscendingBase","RSNewHigh"),
+          "Monthly": lambda p: p in ("MonthlyStage2","SaucerBottom"),
+      }.get(_tf_label, lambda p: True)
+
+      for pat, (detector, windows) in dets.items():
+        if not _tf_pats(pat): continue
+        close = _close; vol = _vol  # rebind for this TF
         best = None
         for w in windows:
             if len(close) < w: continue
@@ -1561,17 +2003,25 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
         except Exception:
             rs_pct = None
         leg = identify_leg(close, best["bz"])
+        # Historical win rate from signal_outcomes
+        _wr = _get_pattern_winrate(con, best["pattern"]) if "con" in dir() else None
+
         notes = " | ".join(filter(None, [
             "EARNINGS SOON" if earnings_near else None,
             "VOL DRY-UP" if vdu else None,
             "STAGE2" if "Stage2" in stage else None,
             f"ADR={adr}%" if adr >= 3.5 else None,
+            f"WIN:{_wr}%" if _wr is not None else None,
+            "LOW-FLOAT" if low_float else None,
+            f"DEAL:{deal_type}₹{deal_val_cr}Cr" if has_deal and deal_val_cr else None,
+            f"PE:{round(fund.get('pe_ratio') or 0)}" if fund.get("pe_ratio") else None,
+            f"PLEDGE:{fund.get('scr_pledging_pct')}%" if (fund.get('scr_pledging_pct') or 0) > 10 else None,
         ]))
         rows.append(dict(
             scan_date=str(_today()), scan_time=_ist("%H:%M"),
             scan_mode="daily", stock=sym.replace(".NS",""), name=fund.get("longName"),
             sector=fund.get("sector"), cap_class=cc, cap_cr=cr,
-            pattern=best["pattern"], timeframe="Daily", status=best["status"],
+            pattern=best["pattern"], timeframe=_tf_label, status=best["status"],
             breakout_zone=best["bz"], cmp=best["last"], stop_loss=stop,
             target_1=t1, target_2=t2, target_3=t3, risk_reward=rr,
             quality=best["quality"], vol_surge=best.get("vs"),
@@ -1582,7 +2032,37 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
             vol_dryup=1 if vdu else 0, stage=stage, recommendation=rec,
             m1=best.get("m1"), m2=best.get("m2"), m3=best.get("m3"),
             m4=best.get("m4"), m5=best.get("m5"), notes=notes or None,
-            **calc_position_size(best["last"], stop or 0)))
+            **calc_position_size(best["last"], stop or 0),
+            # v4.3 new columns
+            pattern_detail=json.dumps({
+                k: best.get(k) for k in
+                ["m1","m2","m3","m4","m5"] if best.get(k) is not None
+            }),
+            promoter_score=prom_score,
+            earnings_score=earn_score,
+            low_float=1 if low_float else 0,
+            insider_deal=1 if has_deal else 0,
+            deal_value_cr=deal_val_cr,
+            deal_type=deal_type,
+            pe_ratio=fund.get("pe_ratio") or fund.get("scr_pe"),
+            pb_ratio=fund.get("pb_ratio") or fund.get("scr_pb"),
+            roe=fund.get("roe") or fund.get("scr_roe"),
+            roce=fund.get("scr_roce"),
+            revenue_growth_yoy=fund.get("revenue_growth_yoy"),
+            revenue_growth_3yr=fund.get("scr_revenue_growth_3yr"),
+            promoter_pct=fund.get("scr_promoter_pct"),
+            pledging_pct=fund.get("scr_pledging_pct"),
+            debt_equity=fund.get("debt_to_equity") or fund.get("scr_debt_equity"),
+            free_float_pct=fund.get("free_float_pct"),
+            piotroski_score=fund.get("piotroski_score"),
+            eps_accelerating=1 if fund.get("eps_accelerating") else 0,
+            rsi_14=_calc_rsi14(close) if len(close) >= 15 else None,
+            atr_pct=round(calc_atr(close,14)/close[-1]*100,2) if len(close)>=15 else None,
+            above_200ma_wk=1 if (close_wk is not None and len(close_wk)>=200
+                                  and close_wk[-1] > np.mean(close_wk[-200:])) else 0,
+            weekly_trend=get_sector_trend(sym, "1wk") if _tf_label=="Daily" else None,
+            monthly_trend=get_sector_trend(sym, "1mo") if _tf_label=="Daily" else None,
+        ))
 
     if len(patterns_found) > 1:
         conv = "+".join(sorted(patterns_found))
@@ -2075,6 +2555,7 @@ def main():
     ap = argparse.ArgumentParser(description="NSE Scanner v3.3")
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--daily", action="store_true", help="Full scan (8AM, 12:30PM, 4:30PM)")
+    mode.add_argument("--weekly",   action="store_true", help="Weekly+monthly patterns (Saturday)")
     mode.add_argument("--halfhour", action="store_true", help="30-min watchlist+quick scan")
     mode.add_argument("--dashboard", action="store_true", help="Flask web UI")
     mode.add_argument("--healthcheck", action="store_true")
@@ -2114,6 +2595,51 @@ def main():
         aggression  = regime_info["aggression"]
         log.info(f"Market: {market_trend} | FTD: {ftd_active} | "
                  f"Regime: {regime_info['regime']} (agg={aggression}) | VIX: {india_vix}")
+
+    # ---- WEEKLY SCAN MODE (Saturday) ----
+    if args.weekly:
+        t0 = time.time()
+        log.info(f"=== Weekly scan {_today()} {_ist('%H:%M')} ===")
+        stocks = load_universe()
+        # Only scan liquid large/mid caps for weekly patterns (speed + quality)
+        log.info(f"Weekly scan: {len(stocks)} stocks (weekly+monthly TFs)")
+        all_rows = []; ok_count = 0
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+            futs = {ex.submit(scan_stock, s, nifty_d, ftd_active, market_trend,
+                              "5y", {"WeeklyVCP","WeeklyFlatBase","MonthlyStage2",
+                                     "SaucerBottom","CupHandle","VCP","RSNewHigh",
+                                     "AscendingBase","PowerTrend"},
+                              aggression): s for s in stocks}
+            for fut in as_completed(futs):
+                ok_count += 1
+                try:
+                    rows, _ = fut.result()
+                    if rows: all_rows.extend(rows)
+                except Exception: pass
+        if all_rows:
+            wdf = (pd.DataFrame(all_rows)
+                   .drop_duplicates(subset=["stock","pattern","timeframe"])
+                   .sort_values("_score" if "_score" in all_rows[0] else "quality",
+                                ascending=False)
+                   .reset_index(drop=True))
+            csv_p = os.path.join(OUTPUT_DIR, f"weekly_{_today()}.csv")
+            wdf.to_csv(csv_p, index=False)
+            log.info(f"Weekly scan: {len(wdf)} signals | {time.time()-t0:.0f}s")
+            if args.telegram:
+                _wbuys = wdf[wdf["recommendation"].str.startswith("BUY", na=False)]
+                msg = (f"<b>\U0001f4c5 Weekend Watchlist — {_today()}</b>\n"
+                       f"Weekly+Monthly scan | {len(wdf)} signals | {len(_wbuys)} BUY\n\n")
+                for _, r in _wbuys.head(10).iterrows():
+                    msg += (f"\U0001f7e2 <b>{r['stock']}</b> ({r.get('cap_class','?')}) "
+                            f"— {r['pattern']} [{r.get('timeframe','?')}]\n"
+                            f"   CMP \u20b9{r['cmp']} | BZ \u20b9{r.get('breakout_zone','?')}"
+                            f" | SL \u20b9{r.get('stop_loss','?')}\n"
+                            f"   Promoter {r.get('promoter_pct','?')}%"
+                            f" | Pledge {r.get('pledging_pct','?')}%"
+                            f" | ROE {r.get('roe','?')}\n")
+                send_telegram(msg)
+                send_telegram_file(csv_p, f"Weekend Watchlist {_today()} | {len(wdf)} signals")
+        return
 
     # ---- 30-MINUTE MODE ----
     if args.halfhour:
@@ -2202,18 +2728,31 @@ def main():
            .reset_index(drop=True))
 
     def _score(r):
-        cs  = (r.get("canslim_score") or 0)
-        q   = (r.get("quality") or 0) * 100
-        vs  = min(r.get("vol_surge") or 1, 5) / 5
-        rr  = min(r.get("risk_reward") or 0, 5) / 5
-        rw  = {"BUY — strong":3,"BUY — moderate":2,
-               "WATCH — await breakout":1.5,"WATCH — mixed":1}.get(r.get("recommendation",""),0)
-        ti  = 0.3 if (r.get("m3") or 0) >= 1.05 else 0   # TI65 bonus
-        nb  = 0.2 if (r.get("m4") or 0) >= 1.0 else 0    # narrow-day bonus
-        cb  = 0.5 if r.get("converging") else 0            # convergence bonus
-        s2  = 0.3 if "Stage2" in str(r.get("stage","")) else 0
-        vd  = 0.2 if r.get("vol_dryup") else 0
-        return cs*0.30 + q*0.20 + rw*0.25 + vs*0.10 + rr*0.05 + ti+nb+cb+s2+vd
+        cs   = (r.get("canslim_score") or 0)
+        q    = (r.get("quality") or 0) * 100
+        vs   = min(r.get("vol_surge") or 1, 5) / 5
+        rr   = min(r.get("risk_reward") or 0, 5) / 5
+        rw   = {"BUY — strong":3,"BUY — moderate":2,
+                "WATCH — await breakout":1.5,"WATCH — mixed":1}.get(r.get("recommendation",""),0)
+        rs   = min(r.get("rs_percentile") or 50, 100) / 100
+        ti   = 0.3 if (r.get("m3") or 0) >= 1.05 else 0
+        nb   = 0.2 if (r.get("m4") or 0) >= 1.0 else 0
+        cb   = 0.5 if r.get("converging") else 0
+        s2   = 0.3 if "Stage2" in str(r.get("stage","")) else 0
+        vd   = 0.2 if r.get("vol_dryup") else 0
+        # v4.3 fundamental bonuses
+        ps   = (r.get("promoter_score") or 0.5) * 0.25
+        es   = (r.get("earnings_score") or 0.5) * 0.15
+        lf   = 0.2 if r.get("low_float") else 0
+        ins  = 0.4 if r.get("insider_deal") else 0
+        ea   = 0.2 if r.get("eps_accelerating") else 0
+        # Pledging PENALTY
+        pledge_pen = -min((r.get("pledging_pct") or 0) / 30, 1) * 0.5
+        # Win rate bonus
+        wr_n = r.get("notes") or ""
+        wr_b = 0.2 if any(f"WIN:{x}" in wr_n for x in ["7","8","9"]) else 0
+        return (cs*0.18 + q*0.15 + rw*0.15 + rs*0.08 + vs*0.07 + rr*0.05
+                + ps + es + lf + ins + ea + ti+nb+cb+s2+vd + pledge_pen + wr_b)
 
     raw["_score"] = raw.apply(_score, axis=1)
     df = raw.sort_values("_score", ascending=False).drop(columns=["_score"]).reset_index(drop=True)
