@@ -1,40 +1,46 @@
-name: NSE Live Scanner v4.3
+name: NSE Live Scanner v5.0
 
 on:
   schedule:
-    # ── DAILY SCANS (update EOD + full scan) ────────────────────────────────
-    # 8:00 AM IST  = 2:30 UTC
+    # ════════════════════════════════════════════════════════════════
+    # ALL TIMES ARE UTC  (IST = UTC + 5:30)
+    # ════════════════════════════════════════════════════════════════
+
+    # ── DAILY FULL SCANS (EOD data + 2100-stock pattern scan) ───────
+    # 8:00 AM IST  = 02:30 UTC
     - cron: "30 2 * * 1-5"
-    # 12:30 PM IST = 7:00 UTC
+    # 12:30 PM IST = 07:00 UTC
     - cron: "0 7 * * 1-5"
-    # 4:30 PM IST  = 11:00 UTC
+    # 4:30 PM IST  = 11:00 UTC  (post-close final)
     - cron: "0 11 * * 1-5"
 
-    # ── GAP SCANNER 9:20 AM IST = 3:50 UTC ──────────────────────────────────
-    - cron: "50 3 * * 1-5"
+    # ── WEEKLY SCAN (Saturday 8:00 AM IST = 02:30 UTC) ───────────────
+    - cron: "30 2 * * 6"
 
-    # ── 30-MIN SCANS (update intraday + halfhour scan) ───────────────────────
-    - cron: "30 3 * * 1-5"   #  9:00 AM IST
-    - cron: "0 4 * * 1-5"    #  9:30 AM IST
-    - cron: "30 4 * * 1-5"   # 10:00 AM IST
-    - cron: "0 5 * * 1-5"    # 10:30 AM IST
-    - cron: "30 5 * * 1-5"   # 11:00 AM IST
-    - cron: "0 6 * * 1-5"    # 11:30 AM IST
-    - cron: "30 6 * * 1-5"   # 12:00 PM IST
-    - cron: "30 7 * * 1-5"   #  1:00 PM IST
-    - cron: "0 8 * * 1-5"    #  1:30 PM IST
-    - cron: "30 8 * * 1-5"   #  2:00 PM IST
-    - cron: "0 9 * * 1-5"    #  2:30 PM IST
-    - cron: "30 9 * * 1-5"   #  3:00 PM IST
-    - cron: "0 10 * * 1-5"   #  3:30 PM IST
+    # ── GAP SCANNER (9:15 AM IST = 03:45 UTC) ────────────────────────
+    - cron: "45 3 * * 1-5"
 
-    # ── WEEKLY SCAN Saturday 9:00 AM IST = 3:30 UTC ─────────────────────────
-    - cron: "30 3 * * 6"
+    # ── 30-MIN INTRADAY SCANS (09:00 – 15:30 IST strict) ────────────
+    # Note: 09:30 skipped — gap scan already ran at 09:15
+    # Note: 12:30 covered by daily scan (07:00 UTC)
+    - cron: "30 3 * * 1-5"    # 09:00 IST ← MARKET OPEN
+    - cron: "30 4 * * 1-5"    # 10:00 IST
+    - cron: "0 5 * * 1-5"     # 10:30 IST
+    - cron: "30 5 * * 1-5"    # 11:00 IST
+    - cron: "0 6 * * 1-5"     # 11:30 IST
+    - cron: "30 6 * * 1-5"    # 12:00 IST
+    # 12:30 → daily scan
+    - cron: "30 7 * * 1-5"    # 13:00 IST
+    - cron: "0 8 * * 1-5"     # 13:30 IST
+    - cron: "30 8 * * 1-5"    # 14:00 IST
+    - cron: "0 9 * * 1-5"     # 14:30 IST
+    - cron: "30 9 * * 1-5"    # 15:00 IST
+    - cron: "0 10 * * 1-5"    # 15:30 IST ← MARKET CLOSE
 
   workflow_dispatch:
     inputs:
       mode:
-        description: "Mode to run"
+        description: "Mode"
         required: true
         type: choice
         options:
@@ -56,7 +62,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
@@ -72,11 +78,12 @@ jobs:
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Get week number
+      - name: Week number (cache key)
         id: week
         run: echo "week=$(date -u +%V)" >> $GITHUB_OUTPUT
 
@@ -85,131 +92,133 @@ jobs:
         with:
           path: price_cache.db
           key: price-cache-${{ runner.os }}-week${{ steps.week.outputs.week }}
-          restore-keys: |
-            price-cache-${{ runner.os }}-
+          restore-keys: price-cache-${{ runner.os }}-
 
-      # ── Determine mode ──────────────────────────────────────────────────────
-      - name: Set mode
+      # ── DETECT MODE ────────────────────────────────────────────────
+      - name: Detect mode
         id: mode
         run: |
           SCHED="${{ github.event.schedule }}"
           INPUT="${{ github.event.inputs.mode }}"
 
-          if [ -n "$INPUT" ]; then
-            echo "MODE=$INPUT" >> $GITHUB_OUTPUT
-
-          # Gap scan 9:20 AM IST
-          elif [ "$SCHED" = "50 3 * * 1-5" ]; then
-            echo "MODE=gap" >> $GITHUB_OUTPUT
-
-          # Saturday weekly scan
-          elif [ "$SCHED" = "30 3 * * 6" ]; then
-            echo "MODE=weekly" >> $GITHUB_OUTPUT
-
-          # Daily scans: 8AM / 12:30PM / 4:30PM IST
+          if   [ -n "$INPUT" ];                    then echo "MODE=$INPUT"    >> $GITHUB_OUTPUT
+          elif [ "$SCHED" = "30 2 * * 6" ];        then echo "MODE=weekly"   >> $GITHUB_OUTPUT
+          elif [ "$SCHED" = "45 3 * * 1-5" ];      then echo "MODE=gap"      >> $GITHUB_OUTPUT
           elif [ "$SCHED" = "30 2 * * 1-5" ] || \
-               [ "$SCHED" = "0 7 * * 1-5" ]  || \
-               [ "$SCHED" = "0 11 * * 1-5" ]; then
-            echo "MODE=daily" >> $GITHUB_OUTPUT
-
-          # All other slots = halfhour
-          else
-            echo "MODE=halfhour" >> $GITHUB_OUTPUT
+               [ "$SCHED" = "0 7 * * 1-5"  ] || \
+               [ "$SCHED" = "0 11 * * 1-5" ];     then echo "MODE=daily"    >> $GITHUB_OUTPUT
+          else                                          echo "MODE=halfhour" >> $GITHUB_OUTPUT
           fi
 
-      # ── DAILY: update EOD data → sector indices → bulk deals → scan ─────────
-      - name: Daily (full update + scan)
-        if: steps.mode.outputs.MODE == 'daily'
-        env:
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          PORTFOLIO_VALUE: ${{ secrets.PORTFOLIO_VALUE || '1000000' }}
-        run: |
-          echo "=== Step 1/4: EOD bars (1d/1wk/1mo) ==="
-          python data_updater.py --daily
-          echo "=== Step 2/4: Sector indices ==="
-          python data_updater.py --sectors
-          echo "=== Step 3/4: Full pattern scan ==="
-          python scanner.py --daily --telegram
-          echo "=== Step 4/4: Track outcomes ==="
-          python scanner.py --daily --telegram || true
+          echo "Detected: $(grep MODE $GITHUB_OUTPUT)"
 
-      # ── HALFHOUR: update 15m/1h → scan ──────────────────────────────────────
-      - name: Halfhour (intraday update + scan)
-        if: steps.mode.outputs.MODE == 'halfhour'
-        env:
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          PORTFOLIO_VALUE: ${{ secrets.PORTFOLIO_VALUE || '1000000' }}
-        run: |
-          echo "=== Step 1/2: Intraday bars (15m + 1h) ==="
-          python data_updater.py --intraday
-          echo "=== Step 2/2: Halfhour scan ==="
-          python scanner.py --halfhour --telegram
-
-      # ── WEEKLY: Saturday morning deep scan ─────────────────────────────────
-      - name: Weekly scan (Saturday — weekly+monthly patterns)
+      # ── WEEKLY ─────────────────────────────────────────────────────
+      - name: Weekly scan (Saturday)
         if: steps.mode.outputs.MODE == 'weekly'
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
           PORTFOLIO_VALUE: ${{ secrets.PORTFOLIO_VALUE || '1000000' }}
         run: |
-          echo "=== Weekly+monthly pattern scan ==="
+          echo "=== WEEKLY $(date -u '+%H:%M UTC') ==="
+          python data_updater.py --daily
           python scanner.py --weekly --telegram
 
-      # ── GAP SCANNER ──────────────────────────────────────────────────────────
-      - name: Gap scanner (9:20 AM IST)
+      # ── DAILY ──────────────────────────────────────────────────────
+      - name: Daily scan
+        if: steps.mode.outputs.MODE == 'daily'
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
+          PORTFOLIO_VALUE: ${{ secrets.PORTFOLIO_VALUE || '1000000' }}
+        run: |
+          echo "=== DAILY $(date -u '+%H:%M UTC') ==="
+          echo "1/3 EOD bars..."
+          python data_updater.py --daily
+          echo "2/3 Sector indices..."
+          python data_updater.py --sectors
+          echo "3/3 Pattern scan..."
+          python scanner.py --daily --telegram
+
+      # ── HALFHOUR ───────────────────────────────────────────────────
+      - name: Halfhour scan
+        if: steps.mode.outputs.MODE == 'halfhour'
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
+          PORTFOLIO_VALUE: ${{ secrets.PORTFOLIO_VALUE || '1000000' }}
+        run: |
+          echo "=== 30-MIN $(date -u '+%H:%M UTC') ==="
+          echo "1/2 Intraday bars..."
+          python data_updater.py --intraday
+          echo "2/2 Pattern scan..."
+          # Manual dispatch → --force bypasses market-hours guard
+          if [ -n "${{ github.event.inputs.mode }}" ]; then
+            python scanner.py --halfhour --telegram --force
+          else
+            python scanner.py --halfhour --telegram
+          fi
+
+      # ── GAP ────────────────────────────────────────────────────────
+      - name: Gap scan
         if: steps.mode.outputs.MODE == 'gap'
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        run: python data_updater.py --gap --telegram
-
-      # ── FUNDAMENTALS REFRESH (manual) ────────────────────────────────────────
-      - name: Fundamentals refresh
-        if: steps.mode.outputs.MODE == 'fundamentals'
+          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
         run: |
-          python -c "
-          from fundamentals import batch_refresh_fundamentals, fetch_nse_bulk_deals
-          from data_updater import load_universe
-          stocks = load_universe()
-          fetch_nse_bulk_deals()
-          batch_refresh_fundamentals(stocks[:500], workers=6)
-          print('Done')
-          "
+          echo "=== GAP SCAN $(date -u '+%H:%M UTC') ==="
+          python data_updater.py --gap --telegram
 
-      # ── STANDALONE MODES ─────────────────────────────────────────────────────
-      - name: Test
+      # ── TEST (always saves CSV + sends TG) ─────────────────────────
+      - name: Test scan
         if: steps.mode.outputs.MODE == 'test'
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
+          PORTFOLIO_VALUE: ${{ secrets.PORTFOLIO_VALUE || '1000000' }}
         run: |
+          echo "=== TEST $(date -u '+%H:%M UTC') ==="
           python data_updater.py --intraday
-          python scanner.py --test
+          python scanner.py --test --telegram
 
+      # ── HEALTHCHECK ────────────────────────────────────────────────
       - name: Healthcheck
         if: steps.mode.outputs.MODE == 'healthcheck'
         run: python scanner.py --healthcheck
 
-      - name: Bootstrap (full one-time download ~65 min)
+      # ── BOOTSTRAP (one-time ~65 min) ───────────────────────────────
+      - name: Bootstrap
         if: steps.mode.outputs.MODE == 'bootstrap'
         timeout-minutes: 90
         run: |
           python data_updater.py --bootstrap
           python data_updater.py --stats
 
+      # ── MANUAL HELPERS ─────────────────────────────────────────────
       - name: Stats
         if: steps.mode.outputs.MODE == 'stats'
         run: python data_updater.py --stats
 
-      - name: Standalone EOD update
+      - name: Manual EOD update
         if: steps.mode.outputs.MODE == 'update-daily'
         run: python data_updater.py --daily
 
-      - name: Standalone intraday update
+      - name: Manual intraday update
         if: steps.mode.outputs.MODE == 'update-intraday'
         run: python data_updater.py --intraday
 
-      # ── Save price cache ──────────────────────────────────────────────────────
+      - name: Fundamentals refresh
+        if: steps.mode.outputs.MODE == 'fundamentals'
+        run: |
+          python -c "
+          from fundamentals import batch_refresh_fundamentals, fetch_nse_bulk_deals
+          from data_updater import load_universe
+          fetch_nse_bulk_deals()
+          batch_refresh_fundamentals(load_universe()[:500], workers=6)
+          print('Done')
+          "
+
+      # ── SAVE CACHE ─────────────────────────────────────────────────
       - name: Save price cache
         if: always()
         uses: actions/cache/save@v4
@@ -217,17 +226,23 @@ jobs:
           path: price_cache.db
           key: price-cache-${{ runner.os }}-week${{ steps.week.outputs.week }}-${{ github.run_number }}
 
-      # ── Commit watchlist ──────────────────────────────────────────────────────
+      # ── COMMIT WATCHLIST ────────────────────────────────────────────
       - name: Commit watchlist
-        if: steps.mode.outputs.MODE == 'daily' || steps.mode.outputs.MODE == 'weekly'
+        if: >
+          always() &&
+          (steps.mode.outputs.MODE == 'daily' ||
+           steps.mode.outputs.MODE == 'weekly' ||
+           steps.mode.outputs.MODE == 'test')
         run: |
-          git config user.name "NSE Scanner Bot"
+          git config user.name  "NSE Scanner Bot"
           git config user.email "scanner@noreply.github.com"
           git add watchlist.json || true
-          git diff --staged --quiet || git commit -m "watchlist: $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git diff --staged --quiet || \
+            git commit -m "watchlist: $(date -u '+%Y-%m-%d %H:%M') [${{ steps.mode.outputs.MODE }}]"
           git push || true
 
-      # ── Upload artifacts ──────────────────────────────────────────────────────
+      # ── UPLOAD ALL ARTIFACTS (CSV + logs + DB) ──────────────────────
+      # Download CSVs from: Actions → your run → Artifacts section
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
@@ -239,3 +254,4 @@ jobs:
             signals.db
             watchlist.json
           retention-days: 30
+          if-no-files-found: warn
