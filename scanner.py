@@ -46,19 +46,18 @@ from scipy.stats import percentileofscore
 from functools import lru_cache as _lru
 # fundamentals module — imported lazily to avoid circular imports
 try:
-    from fundamentals import (get_fundamentals, get_bulk_deals_today,
-                               promoter_quality_score, earnings_quality_score,
-                               is_low_float, has_insider_activity,
-                               calc_piotroski)
-    _FUND_MODULE = True
+    # from fundamentals import — DISABLED to avoid 401 rate limits
+    _FUND_MODULE = False  # Disabled
 except ImportError:
     _FUND_MODULE = False
-    def get_fundamentals(sym, **kw): return {}
-    def get_bulk_deals_today(): return {}
-    def promoter_quality_score(f): return 0.5
-    def earnings_quality_score(f): return 0.5
-    def is_low_float(f): return False
-    def has_insider_activity(*a): return False, None, None
+
+# Fallback stubs (fundamentals disabled)
+def get_fundamentals(sym, **kw): return {}
+def get_bulk_deals_today(): return {}
+def promoter_quality_score(f): return 0.5
+def earnings_quality_score(f): return 0.5
+def is_low_float(f): return False
+def has_insider_activity(*a): return False, None, None
 
 # ================================================================
 # PATHS & LOGGING
@@ -104,17 +103,22 @@ TG_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 TG_CHAT  = os.environ.get("TG_CHAT_ID", "")
 
 CS = {
+    # Fundamental checks (C, A, I) are DISABLED → max achievable score from
+    # price-only checks (N + L_rs + market + liquidity) = 3 in bull, 2 in bear.
+    # Thresholds calibrated accordingly.
     "C_min": 0.25, "A_min": 0.25, "N_max_from_high": 0.15,
-    "L_min_rs": 1.10, "I_min_instl": 0.20,
-    "buy_strong": 6, "buy_moderate": 4,
+    "L_min_rs": 1.05,   # was 1.10 — slightly relaxed RS hurdle
+    "I_min_instl": 0.20,
+    "buy_strong": 3,    # was 6 — unreachable without fundamentals
+    "buy_moderate": 2,  # was 4 — unreachable without fundamentals
 }
 
 # ── Trading filters ────────────────────────────────────────────────────────────
-MIN_LIQUIDITY_CR   = 15.0   # min avg daily turnover ₹ Cr (was 1 — too loose)
+MIN_LIQUIDITY_CR   = 2.0    # min avg daily turnover ₹ Cr (2 Cr = ~₹20M — captures most tradeable stocks)
 MIN_DIST_52WK_PCT  = 0.00   # stock must be within this % of 52wk high (0 = no filter)
-MAX_DIST_52WK_PCT  = 0.30   # within 30% of 52-week high (Minervishi rule N)
+MAX_DIST_52WK_PCT  = 0.50   # within 50% of 52-week high (relaxed: bear mkt bases form deeper)
 MAX_STOP_PCT       = 0.08   # max stop loss from entry (8% — Minervishi hard limit)
-MIN_RS_PERCENTILE  = 40     # min relative-strength percentile vs universe
+MIN_RS_PERCENTILE  = 30     # min relative-strength percentile vs universe (relaxed from 40)
 INDIA_VIX_SYM      = "^INDIAVIX"
 VIX_HIGH_THRESH    = 22.0   # if VIX > this: reduce aggression, flag as "High Fear"
 VIX_EXTREME_THRESH = 30.0
@@ -412,14 +416,21 @@ def _get_cache():
 
 
 def _cache_read(stock: str) -> pd.DataFrame | None:
-    """Load cached OHLCV for a stock. Returns DataFrame or None."""
+    """Load cached daily OHLCV for a stock. Filters tf='1d' in multi-TF schema."""
     try:
         con = _get_cache()
-        df = pd.read_sql(
-            "SELECT date,open,high,low,close,volume FROM price_cache "
-            "WHERE stock=? ORDER BY date",
-            con, params=(stock,)
-        )
+        try:
+            df = pd.read_sql(
+                "SELECT date,open,high,low,close,volume FROM price_cache "
+                "WHERE stock=? AND tf='1d' ORDER BY date",
+                con, params=(stock,)
+            )
+        except Exception:
+            df = pd.read_sql(
+                "SELECT date,open,high,low,close,volume FROM price_cache "
+                "WHERE stock=? ORDER BY date",
+                con, params=(stock,)
+            )
         if len(df) < 20:
             return None
         df["date"] = pd.to_datetime(df["date"])
@@ -431,8 +442,39 @@ def _cache_read(stock: str) -> pd.DataFrame | None:
         return None
 
 
-def _cache_write(stock: str, df: pd.DataFrame):
-    """Write/upsert OHLCV rows for a stock."""
+def read_cache(stock: str, tf: str = "1d", limit: int = 9999) -> pd.DataFrame | None:
+    """Multi-TF cache read — matches data_updater schema (stock, tf, date)."""
+    try:
+        con = _get_cache()
+        try:
+            df = pd.read_sql(
+                f"SELECT date,open,high,low,close,volume FROM price_cache "
+                f"WHERE stock=? AND tf=? ORDER BY date DESC LIMIT {limit}",
+                con, params=(stock, tf)
+            )
+        except Exception:
+            if tf != "1d":
+                return None
+            df = pd.read_sql(
+                f"SELECT date,open,high,low,close,volume FROM price_cache "
+                f"WHERE stock=? ORDER BY date DESC LIMIT {limit}",
+                con, params=(stock,)
+            )
+        if len(df) < 2:
+            return None
+        df = df.iloc[::-1].reset_index(drop=True)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+        df.columns = ["Open", "High", "Low", "Close", "Volume"]
+        df.index.name = None
+        return df.astype(float)
+    except Exception as e:
+        log.debug(f"read_cache {stock} {tf}: {e}")
+        return None
+
+
+def _cache_write(stock: str, df: pd.DataFrame, tf: str = "1d"):
+    """Write/upsert OHLCV rows. Supports multi-TF schema (stock,tf,date)."""
     if df is None or len(df) == 0:
         return
     try:
@@ -441,7 +483,7 @@ def _cache_write(stock: str, df: pd.DataFrame):
         for idx, row in df.iterrows():
             date_str = str(idx.date()) if hasattr(idx, "date") else str(idx)[:10]
             rows.append((
-                stock, date_str,
+                stock, tf, date_str,
                 float(row.get("Open", row.get("open", 0)) or 0),
                 float(row.get("High", row.get("high", 0)) or 0),
                 float(row.get("Low",  row.get("low",  0)) or 0),
@@ -449,11 +491,19 @@ def _cache_write(stock: str, df: pd.DataFrame):
                 float(row.get("Volume",row.get("volume",0)) or 0),
             ))
         with _cache_lock:
-            con.executemany(
-                "INSERT OR REPLACE INTO price_cache "
-                "(stock,date,open,high,low,close,volume) VALUES (?,?,?,?,?,?,?)",
-                rows
-            )
+            try:
+                con.executemany(
+                    "INSERT OR REPLACE INTO price_cache "
+                    "(stock,tf,date,open,high,low,close,volume) VALUES (?,?,?,?,?,?,?,?)",
+                    rows
+                )
+            except Exception:
+                old_rows = [(r[0],) + r[2:] for r in rows]
+                con.executemany(
+                    "INSERT OR REPLACE INTO price_cache "
+                    "(stock,date,open,high,low,close,volume) VALUES (?,?,?,?,?,?,?)",
+                    old_rows
+                )
             con.execute(
                 "INSERT OR REPLACE INTO cache_meta (stock,last_updated,bar_count) "
                 "VALUES (?,?,?)",
@@ -572,14 +622,8 @@ def dl_cached(sym: str, period: str = PERIOD_DAILY) -> pd.DataFrame | None:
 
 
 def dl_fund_cached(sym: str) -> dict:
-    """Fundamentals with same-day cache. Avoids hitting Yahoo 2000× per daily scan."""
-    cached = _fund_cache_read(sym)
-    if cached is not None:
-        return cached
-    fund = dl_fund(sym)  # raw fetch
-    if fund.get("_fund_ok"):
-        _fund_cache_write(sym, fund)
-    return fund
+    """Fundamentals disabled — OHLCV-only mode."""
+    return {}
 
 
 def warm_cache(stocks: list, workers: int = 8):
@@ -668,40 +712,7 @@ def dl(sym, interval="1d", period=PERIOD_DAILY):
     return None
 
 def dl_fund(sym):
-    for attempt in range(DL_RETRIES):
-        try:
-            sess = _get_session()
-            kw = {"session": sess} if sess is not None else {}
-            tk = yf.Ticker(sym, **kw)
-            info = tk.info or {}
-            if not info.get("marketCap"):
-                if attempt < DL_RETRIES - 1:
-                    time.sleep(3)
-                    continue
-                return {"_fund_ok": False}
-            try:
-                cal = tk.calendar
-                ne = cal.get("Earnings Date", [None])[0] if cal else None
-            except Exception:
-                ne = None
-            return {
-                "_fund_ok": True,
-                "marketCap": info.get("marketCap"),
-                "earningsQuarterlyGrowth": info.get("earningsQuarterlyGrowth"),
-                "earningsGrowth": info.get("earningsGrowth"),
-                "heldPercentInstitutions": info.get("heldPercentInstitutions"),
-                "sector": info.get("sector"),
-                "longName": info.get("longName") or info.get("shortName"),
-                "next_earnings": str(ne) if ne else None,
-            }
-        except Exception as e:
-            msg = str(e)
-            if "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
-                log.warning(f"401/Crumb on fund {sym} attempt {attempt+1} — reset session")
-                _reset_session()
-                time.sleep(5)
-            elif attempt < DL_RETRIES - 1:
-                time.sleep(DL_BACKOFF * (attempt + 1))
+    """Fundamentals disabled — returns empty dict to avoid 401 rate limit errors."""
     return {"_fund_ok": False}
 
 def cap_class(mc):
@@ -880,19 +891,32 @@ def canslim_score(close, vol, fund, nc, nr):
 
 def recommend(status, score, mkt_up, aggression=2, rs_pct=None):
     """
-    FIX: respect market regime aggression (0=Bear,1=Cautious,2=Uptrend,3=Bull).
-    Bear (aggression=0): no BUY signals. RS filter applied for BUY-strong.
+    Signal recommendation based on pattern status, CANSLIM score, market regime.
+    aggression: 0=Bear, 1=Choppy/Cautious, 2=Uptrend, 3=Bull
+    NOTE: fundamentals disabled → max score ~3. Thresholds calibrated for price-only.
     """
-    bo = any(k in status for k in ["Breakout","Burst","Pivot","Pocket"])
-    if aggression == 0: return "WATCH — bear mkt" if score >= CS["buy_moderate"] else "AVOID"
+    bo = any(k in status for k in ["Breakout","Burst","Pivot","Pocket","Reclaim","ORB"])
     rs_ok = rs_pct is None or rs_pct >= MIN_RS_PERCENTILE
+
+    # Bear market: still show WATCH for patterns (never full AVOID on detected pattern)
+    if aggression == 0:
+        if bo and rs_ok:
+            return "WATCH — bear mkt"
+        if score >= CS["buy_moderate"]:
+            return "WATCH — bear mkt"
+        return "WATCH — bear mkt"   # pattern was detected → always show it
+
     if bo and score >= CS["buy_strong"] and mkt_up and aggression >= 2 and rs_ok:
         return "BUY — strong"
     if bo and score >= CS["buy_moderate"] and aggression >= 1:
         return "BUY — moderate"
-    if not bo and score >= CS["buy_strong"]: return "WATCH — await breakout"
-    if score >= CS["buy_moderate"]: return "WATCH — mixed"
-    return "AVOID"
+    if bo:
+        return "WATCH — breakout setup"   # breakout pattern but score low → still watch
+    if score >= CS["buy_strong"]:
+        return "WATCH — await breakout"
+    if score >= CS["buy_moderate"]:
+        return "WATCH — mixed"
+    return "WATCH — low score"           # was AVOID — now always emit if pattern found
 
 # ================================================================
 # TARGETS
@@ -1894,21 +1918,16 @@ DETECTORS = {
 # ================================================================
 def scan_stock(sym, nifty_d, ftd_active, market_trend,
                period=PERIOD_DAILY, detector_filter=None, aggression=2):
-    fund = dl_fund_cached(sym)   # v4.3: full multi-source fundamentals
-    fund_ok = fund.get("_fund_ok", False)
-    cc, cr = cap_class(fund.get("marketCap"))
+    fund = {}; fund_ok = False
+    cc, cr = "Unknown", None
     rows = []; patterns_found = set()
+    prom_score = 0.5; earn_score = 0.5; low_float = False
+    has_deal = False; deal_val_cr = None; deal_type = None
 
-    # v4.3 enriched scores
-    prom_score = promoter_quality_score(fund) if fund_ok else 0.5
-    earn_score = earnings_quality_score(fund) if fund_ok else 0.5
-    low_float  = is_low_float(fund) if fund_ok else False
-    _bulk = get_bulk_deals_today()
-    has_deal, deal_val_cr, deal_type = has_insider_activity(
-        sym.replace(".NS",""), _bulk)
-
-    df = read_cache(sym, "1d") or dl_cached(sym, period)
-    if df is None or len(df) < 30: return rows, fund_ok
+    df = read_cache(sym, "1d")
+    if df is None or len(df) == 0:
+        df = dl_cached(sym, period)
+    if df is None or len(df) < 30: return rows, True
 
     close = df["Close"].values.astype(float)
     vol   = df["Volume"].values.astype(float) if "Volume" in df.columns else None
@@ -1919,7 +1938,7 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
     # ── Global liquidity pre-filter (skip before any detector runs) ──────────
     if vol is not None and len(close) >= 20:
         avg_to = np.mean(vol[-20:]) * np.mean(close[-20:]) / 1e7
-        if avg_to < MIN_LIQUIDITY_CR: return rows, fund_ok   # illiquid — skip entirely
+        if avg_to < MIN_LIQUIDITY_CR: return rows, True   # illiquid — skip entirely
 
     # ── 52-week high proximity filter ────────────────────────────────────────
     dist_52wk = None
@@ -1947,7 +1966,7 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
     cs, completeness = canslim_score(close, vol, fund, nc, nr)
     stage = check_weinstein_stage(close)
     vdu = check_volume_dryup(vol)
-    earnings_near = check_earnings_near(fund)
+    earnings_near = False
     adr = calc_adr(close)
 
     dets = {k:v for k,v in DETECTORS.items()
@@ -2007,20 +2026,20 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
         _wr = _get_pattern_winrate(con, best["pattern"]) if "con" in dir() else None
 
         notes = " | ".join(filter(None, [
-            "EARNINGS SOON" if earnings_near else None,
+            
             "VOL DRY-UP" if vdu else None,
             "STAGE2" if "Stage2" in stage else None,
             f"ADR={adr}%" if adr >= 3.5 else None,
             f"WIN:{_wr}%" if _wr is not None else None,
-            "LOW-FLOAT" if low_float else None,
-            f"DEAL:{deal_type}₹{deal_val_cr}Cr" if has_deal and deal_val_cr else None,
-            f"PE:{round(fund.get('pe_ratio') or 0)}" if fund.get("pe_ratio") else None,
-            f"PLEDGE:{fund.get('scr_pledging_pct')}%" if (fund.get('scr_pledging_pct') or 0) > 10 else None,
+            
+            
+            
+            
         ]))
         rows.append(dict(
             scan_date=str(_today()), scan_time=_ist("%H:%M"),
-            scan_mode="daily", stock=sym.replace(".NS",""), name=fund.get("longName"),
-            sector=fund.get("sector"), cap_class=cc, cap_cr=cr,
+            scan_mode="daily", stock=sym.replace(".NS",""), name=None,
+            sector=None, cap_class=cc, cap_cr=cr,
             pattern=best["pattern"], timeframe=_tf_label, status=best["status"],
             breakout_zone=best["bz"], cmp=best["last"], stop_loss=stop,
             target_1=t1, target_2=t2, target_3=t3, risk_reward=rr,
@@ -2028,7 +2047,7 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
             canslim_score=cs, data_completeness=completeness,
             rs_percentile=rs_pct, dist_52wk_pct=dist_52wk,
             converging=None, leg=leg,
-            earnings_near=1 if earnings_near else 0, ftd_active=1 if ftd_active else 0,
+            earnings_near=0, ftd_active=1 if ftd_active else 0,
             vol_dryup=1 if vdu else 0, stage=stage, recommendation=rec,
             m1=best.get("m1"), m2=best.get("m2"), m3=best.get("m3"),
             m4=best.get("m4"), m5=best.get("m5"), notes=notes or None,
@@ -2038,24 +2057,16 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
                 k: best.get(k) for k in
                 ["m1","m2","m3","m4","m5"] if best.get(k) is not None
             }),
-            promoter_score=prom_score,
-            earnings_score=earn_score,
-            low_float=1 if low_float else 0,
-            insider_deal=1 if has_deal else 0,
-            deal_value_cr=deal_val_cr,
+            promoter_score=0.5,
+            earnings_score=0.5,
+            low_float=0,
+            insider_deal=0,
+            deal_value_cr=None,
             deal_type=deal_type,
-            pe_ratio=fund.get("pe_ratio") or fund.get("scr_pe"),
-            pb_ratio=fund.get("pb_ratio") or fund.get("scr_pb"),
-            roe=fund.get("roe") or fund.get("scr_roe"),
-            roce=fund.get("scr_roce"),
-            revenue_growth_yoy=fund.get("revenue_growth_yoy"),
-            revenue_growth_3yr=fund.get("scr_revenue_growth_3yr"),
-            promoter_pct=fund.get("scr_promoter_pct"),
-            pledging_pct=fund.get("scr_pledging_pct"),
-            debt_equity=fund.get("debt_to_equity") or fund.get("scr_debt_equity"),
-            free_float_pct=fund.get("free_float_pct"),
-            piotroski_score=fund.get("piotroski_score"),
-            eps_accelerating=1 if fund.get("eps_accelerating") else 0,
+            pe_ratio=None, pb_ratio=None, roe=None, roce=None,
+            revenue_growth_yoy=None, revenue_growth_3yr=None,
+            promoter_pct=None, pledging_pct=None, debt_equity=None,
+            free_float_pct=None, piotroski_score=None, eps_accelerating=0,
             rsi_14=_calc_rsi14(close) if len(close) >= 15 else None,
             atr_pct=round(calc_atr(close,14)/close[-1]*100,2) if len(close)>=15 else None,
             above_200ma_wk=1 if (close_wk is not None and len(close_wk)>=200
@@ -2196,8 +2207,8 @@ def halfhour_check(nifty_d):
     else:
         intraday_dets = INTRADAY_DETECTORS
     log.info(f"Quick-scan {QUICK_SIZE} stocks for same-day signals...")
-    warm_cache(stocks, workers=MAX_WORKERS)  # incremental refresh for quick-scan stocks
-    stocks = load_universe()[:QUICK_SIZE]
+    stocks = list({w["stock"]+".NS" for w in watchlist} | set(NIFTY_500_FALLBACK_NS[:QUICK_SIZE]))
+    stocks = stocks[:QUICK_SIZE]
     quick_rows = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futs = {ex.submit(scan_stock_intraday, s, nifty_d, ftd_active,
@@ -2319,7 +2330,7 @@ def healthcheck():
     df = dl("RELIANCE.NS", "1d", "1mo")
     print(f"OK ({len(df)} bars)" if df else "FAIL"); ok = ok and bool(df)
     print("[2] Fundamentals... ", end="")
-    f = dl_fund("RELIANCE.NS")
+    f = {}  # dl_fund disabled
     print(f"OK mcap={f.get('marketCap')}" if f.get("marketCap") else "WARN — no mcap")
     print("[3] Universe...     ", end="")
     u = load_universe()
@@ -2429,9 +2440,9 @@ def scan_stock_intraday(sym: str, nifty_d, ftd_active: bool,
     Multi-timeframe intraday scan: 15m + 30m + 45m + 75m + 1h.
     Runs all detectors including ORB and VWAPReclaim.
     """
-    fund = dl_fund_cached(sym)
-    fund_ok = fund.get("_fund_ok", False)
-    cc, cr = cap_class(fund.get("marketCap"))
+    fund = {}
+    fund_ok = False
+    cc, cr = "Unknown", None
     rows = []; patterns_found = set()
 
     # Read 15m base (data_updater stores this)
@@ -2459,7 +2470,9 @@ def scan_stock_intraday(sym: str, nifty_d, ftd_active: bool,
         tf_dfs["1h"] = df_1h
 
     # CANSLIM from daily data
-    df_d = read_cache(sym, "1d", limit=300) or dl_cached(sym)
+    df_d = read_cache(sym, "1d", limit=300)
+    if df_d is None or len(df_d) == 0:
+        df_d = dl_cached(sym)
     nc = nr = None
     cs = 0; completeness = 0; stage = "Unknown"; adr = 0; dist_52wk = None; rs_pct = None
     if df_d is not None and len(df_d) >= 30:
@@ -2486,7 +2499,7 @@ def scan_stock_intraday(sym: str, nifty_d, ftd_active: bool,
     _gaps         = {g["stock"] for g in get_gap_signals_today()}
     is_gap        = sym.replace(".NS","") in _gaps
     vdu           = check_volume_dryup(df_d["Volume"].values.astype(float) if df_d is not None and "Volume" in df_d.columns else None)
-    earnings_near = check_earnings_near(fund)
+    earnings_near = False
     mkt_up        = ftd_active or "Bull" in str(market_trend) or "Uptrend" in str(market_trend)
 
     for tf_name, df in tf_dfs.items():
@@ -2525,14 +2538,14 @@ def scan_stock_intraday(sym: str, nifty_d, ftd_active: bool,
             leg = identify_leg(close, best["bz"])
             pos = calc_position_size(best["last"], stop or 0)
             notes = " | ".join(filter(None,[
-                "EARNINGS SOON" if earnings_near else None,
+                
                 f"RVOL {rvol_td}x" if rvol_td and rvol_td>=2 else None,
                 f"{'↑' if vs_vwap and vs_vwap>0 else '↓'}VWAP {abs(vs_vwap):.1f}%" if vs_vwap else None,
                 "GAP-UP" if is_gap else None, "VOL DRY-UP" if vdu else None,
             ]))
             rows.append(dict(
                 scan_date=str(_today()), scan_time=_ist("%H:%M"), scan_mode="halfhour",
-                stock=sym.replace(".NS",""), name=fund.get("longName"), sector=fund.get("sector"),
+                stock=sym.replace(".NS",""), name=None, sector=None,
                 cap_class=cc, cap_cr=cr, pattern=best["pattern"], timeframe=tf_name,
                 status=best["status"], breakout_zone=best["bz"], cmp=best["last"], stop_loss=stop,
                 target_1=t1, target_2=t2, target_3=t3, risk_reward=rr,
@@ -2540,7 +2553,7 @@ def scan_stock_intraday(sym: str, nifty_d, ftd_active: bool,
                 rs_percentile=rs_pct, dist_52wk_pct=dist_52wk,
                 pos_shares=pos["shares"], pos_value=pos["value"],
                 canslim_score=cs, data_completeness=completeness, converging=None, leg=leg,
-                earnings_near=1 if earnings_near else 0, ftd_active=1 if ftd_active else 0,
+                earnings_near=0, ftd_active=1 if ftd_active else 0,
                 vol_dryup=1 if vdu else 0, stage=stage, recommendation=rec,
                 m1=best.get("m1"), m2=best.get("m2"), m3=best.get("m3"),
                 m4=best.get("m4"), m5=best.get("m5"), notes=notes or None,
@@ -2551,58 +2564,102 @@ def scan_stock_intraday(sym: str, nifty_d, ftd_active: bool,
     return rows, fund_ok
 
 
+
+def _is_market_hours():
+    """True 09:00–15:31 IST weekdays only."""
+    n = _now()
+    if n.weekday() >= 5: return False
+    t = n.hour * 60 + n.minute
+    return 9*60 <= t <= 15*60+31
+
+def _tg_ok():
+    return bool(TG_TOKEN and TG_CHAT)
+
+def _save_csv(df_or_list, prefix, label=""):
+    """Always save CSV. Print path prominently. Return path."""
+    _hm = _ist("%H%M")
+    path = os.path.join(OUTPUT_DIR, f"{prefix}_{_today()}_{_hm}.csv")
+    if isinstance(df_or_list, list):
+        pd.DataFrame(df_or_list).to_csv(path, index=False)
+    elif df_or_list is None or (hasattr(df_or_list,'__len__') and len(df_or_list)==0):
+        pd.DataFrame([{"status":"no_data","time":_ist(),"note":label}]).to_csv(path, index=False)
+    else:
+        df_or_list.to_csv(path, index=False)
+    sz = os.path.getsize(path)
+    log.info(f"{'='*55}")
+    log.info(f"CSV SAVED => {path}  ({sz:,} bytes{(', '+label) if label else ''})")
+    log.info(f"{'='*55}")
+    return path
+
+def _send_tg(msg, csv_path=None, caption=""):
+    """Send TG text + optional CSV. No-op if not configured."""
+    if not _tg_ok(): return
+    send_telegram(msg)
+    if csv_path and os.path.exists(csv_path):
+        send_telegram_file(csv_path, caption)
+
 def main():
-    ap = argparse.ArgumentParser(description="NSE Scanner v3.3")
+    ap = argparse.ArgumentParser(description="NSE Scanner v5.0-final")
     mode = ap.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--daily", action="store_true", help="Full scan (8AM, 12:30PM, 4:30PM)")
-    mode.add_argument("--weekly",   action="store_true", help="Weekly+monthly patterns (Saturday)")
-    mode.add_argument("--halfhour", action="store_true", help="30-min watchlist+quick scan")
-    mode.add_argument("--dashboard", action="store_true", help="Flask web UI")
-    mode.add_argument("--healthcheck", action="store_true")
-    mode.add_argument("--test", action="store_true", help="10 stocks test")
-    ap.add_argument("--telegram", action="store_true")
+    mode.add_argument("--daily",      action="store_true")
+    mode.add_argument("--weekly",     action="store_true")
+    mode.add_argument("--halfhour",   action="store_true")
+    mode.add_argument("--dashboard",  action="store_true")
+    mode.add_argument("--healthcheck",action="store_true")
+    mode.add_argument("--test",       action="store_true")
+    ap.add_argument("--telegram",     action="store_true")
+    ap.add_argument("--force",        action="store_true", help="Bypass market-hours guard")
     args = ap.parse_args()
 
     if args.healthcheck: sys.exit(0 if healthcheck() else 1)
     if args.dashboard: run_dashboard(); return
 
-    # Fetch Nifty
+    # ── Market hours guard — halfhour ONLY runs 09:00-15:31 IST ─────────────
+    if args.halfhour and not args.force:
+        if not _is_market_hours():
+            log.info(f"HALFHOUR SKIPPED: outside 09:00-15:31 IST ({_ist()}). --force to override.")
+            csv_p = _save_csv(None, "halfhour", f"skipped_outside_market_hours_{_ist()}")
+            if _tg_ok() or args.telegram:
+                _send_tg(f"<b>30-min {_ist()}</b>\n⏸ Skipped — outside market hours\nUse --force to run manually.",
+                         csv_p, f"30-min {_ist()} | skipped")
+            sys.exit(0)
+
+    # ── Fetch Nifty ──────────────────────────────────────────────────────────
     nifty_d = None
     for sym in ["^NSEI", "NIFTY_IND_NS"]:
-        nifty_d = dl_cached(sym)  # incremental Nifty cache
-        if nifty_d is not None: break
+        nifty_d = dl_cached(sym)
+        if nifty_d is not None and len(nifty_d) > 50: break
+        # dl_cached fallback may fail (yfinance ValueError on indices) — try cache directly
+        cached = read_cache(sym.replace("^",""), "1d") or _cache_read(sym)
+        if cached is not None and len(cached) > 50:
+            nifty_d = cached; break
     if nifty_d is None:
-        log.warning("Nifty fetch failed — continuing without market signals")
+        log.warning("Nifty fetch failed — using aggression=1 (cautious) as fallback")
 
-    # ── Market context — computed once, shared by ALL modes ──────────────────
-    ftd_active   = False
-    market_trend = "Unknown"
-    aggression   = 2
-    india_vix    = None
-    breadth      = {"pct_above_50": 50, "pct_above_200": 50, "regime": "Unknown"}
-    regime_info  = {"regime": "Unknown", "aggression": 2, "detail": "no data"}
+    ftd_active = False; market_trend = "Unknown"; aggression = 1   # safe default: cautious not bear
+    india_vix = None
+    breadth = {"pct_above_50": 50, "pct_above_200": 50, "regime": "Unknown"}
+    regime_info = {"regime": "Unknown", "aggression": 1, "detail": "no data"}
     if nifty_d is not None:
         ftd_active, ftd_note = check_follow_through_day(nifty_d)
         market_trend = check_market_trend(nifty_d["Close"].values)
         india_vix    = fetch_india_vix()
-        # breadth uses cached stocks — only available after warm-up, use light version here
         try:
-            fallback_sample = NIFTY_500_FALLBACK_NS[:80]
-            breadth = check_market_breadth(fallback_sample)
-        except Exception:
-            pass
+            breadth = check_market_breadth(NIFTY_500_FALLBACK_NS[:80])
+        except Exception: pass
         regime_info = get_market_regime(nifty_d, india_vix, breadth)
-        aggression  = regime_info["aggression"]
+        aggression  = max(1, regime_info["aggression"])   # floor at 1: always show WATCH signals
         log.info(f"Market: {market_trend} | FTD: {ftd_active} | "
                  f"Regime: {regime_info['regime']} (agg={aggression}) | VIX: {india_vix}")
 
-    # ---- WEEKLY SCAN MODE (Saturday) ----
+    # ==============================================================
+    # WEEKLY MODE
+    # ==============================================================
     if args.weekly:
         t0 = time.time()
-        log.info(f"=== Weekly scan {_today()} {_ist('%H:%M')} ===")
+        log.info(f"=== WEEKLY {_today()} {_ist('%H:%M')} ===")
         stocks = load_universe()
-        # Only scan liquid large/mid caps for weekly patterns (speed + quality)
-        log.info(f"Weekly scan: {len(stocks)} stocks (weekly+monthly TFs)")
+        log.info(f"Weekly scan: {len(stocks)} stocks")
         all_rows = []; ok_count = 0
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
             futs = {ex.submit(scan_stock, s, nifty_d, ftd_active, market_trend,
@@ -2616,96 +2673,91 @@ def main():
                     rows, _ = fut.result()
                     if rows: all_rows.extend(rows)
                 except Exception: pass
+        elapsed_w = time.time() - t0
         if all_rows:
             wdf = (pd.DataFrame(all_rows)
                    .drop_duplicates(subset=["stock","pattern","timeframe"])
-                   .sort_values("_score" if "_score" in all_rows[0] else "quality",
-                                ascending=False)
+                   .sort_values("quality", ascending=False)
                    .reset_index(drop=True))
-            csv_p = os.path.join(OUTPUT_DIR, f"weekly_{_today()}.csv")
-            wdf.to_csv(csv_p, index=False)
-            log.info(f"Weekly scan: {len(wdf)} signals | {time.time()-t0:.0f}s")
-            if args.telegram:
-                _wbuys = wdf[wdf["recommendation"].str.startswith("BUY", na=False)]
+        else:
+            log.warning("Weekly: 0 signals"); wdf = pd.DataFrame()
+        log.info(f"Weekly: {len(wdf)} signals | {elapsed_w:.0f}s")
+        csv_p = _save_csv(wdf, "weekly", f"{len(wdf)} signals")
+        if _tg_ok() or args.telegram:
+            _wbuys = wdf[wdf["recommendation"].str.startswith("BUY", na=False)] if len(wdf) else wdf
+            if len(wdf) == 0:
+                msg = f"<b>\U0001f4c5 Weekend Watchlist — {_today()}</b>\n\u26a0\ufe0f 0 signals. Check logs."
+            else:
                 msg = (f"<b>\U0001f4c5 Weekend Watchlist — {_today()}</b>\n"
-                       f"Weekly+Monthly scan | {len(wdf)} signals | {len(_wbuys)} BUY\n\n")
+                       f"Weekly+Monthly | {len(wdf)} signals | {len(_wbuys)} BUY\n\n")
                 for _, r in _wbuys.head(10).iterrows():
                     msg += (f"\U0001f7e2 <b>{r['stock']}</b> ({r.get('cap_class','?')}) "
-                            f"— {r['pattern']} [{r.get('timeframe','?')}]\n"
+                            f"\u2014 {r['pattern']} [{r.get('timeframe','?')}]\n"
                             f"   CMP \u20b9{r['cmp']} | BZ \u20b9{r.get('breakout_zone','?')}"
                             f" | SL \u20b9{r.get('stop_loss','?')}\n"
-                            f"   Promoter {r.get('promoter_pct','?')}%"
-                            f" | Pledge {r.get('pledging_pct','?')}%"
-                            f" | ROE {r.get('roe','?')}\n")
-                send_telegram(msg)
-                send_telegram_file(csv_p, f"Weekend Watchlist {_today()} | {len(wdf)} signals")
+                            f"   Promoter {r.get('promoter_pct','?')}% | Pledge {r.get('pledging_pct','?')}%\n")
+            _send_tg(msg, csv_p, f"Weekend Watchlist {_today()} | {len(wdf)} signals | {elapsed_w:.0f}s")
         return
 
-    # ---- 30-MINUTE MODE ----
+    # ==============================================================
+    # HALFHOUR MODE
+    # ==============================================================
     if args.halfhour:
         t0 = time.time()
-        log.info(f"=== 30-min scan {_ist()} ===")
+        log.info(f"=== 30-min {_ist()} ===")
         alerts, quick_df = halfhour_check(nifty_d)
-        log.info(f"{len(alerts)} alerts | {time.time()-t0:.0f}s")
-        if args.telegram:
-            # ── Text alert: only new (non-deduped) signals ────────────────────
+        elapsed_hh = time.time() - t0
+        log.info(f"{len(alerts)} alerts | {elapsed_hh:.0f}s")
+
+        # ALWAYS build df even if empty
+        if quick_df is None:
+            quick_df = pd.DataFrame(alerts) if alerts else pd.DataFrame()
+
+        # ALWAYS save CSV
+        n_active = sum(1 for a in alerts if a.get("status") in
+                       ("BREAKOUT TRIGGERED","Burst Active","ORB Breakout","VWAP Reclaim"))
+        mkt_str = market_trend if nifty_d is not None else "?"
+        csv_path = _save_csv(quick_df, "halfhour",
+                             f"signals:{len(quick_df)} active:{n_active} mkt:{mkt_str}")
+
+        # TG: auto if env set OR --telegram passed
+        if _tg_ok() or args.telegram:
             if alerts:
                 msg = fmt_halfhour(alerts[:20])
                 if msg: send_telegram(msg)
             else:
-                log.info("No new alerts this round (all deduped or no signals)")
-
-            # ── CSV: always send when quick_df has data (regardless of dedup) ─
-            # quick_df = full scan results; alerts = subset not yet sent today
-            if quick_df is None and alerts:
-                quick_df = pd.DataFrame(alerts)  # fallback: use alert dicts
-            if quick_df is not None and len(quick_df):
-                _hh_time = _ist("%H%M")
-                csv_path = os.path.join(OUTPUT_DIR,
-                    f"halfhour_{_today()}_{_hh_time}.csv")
-                quick_df.to_csv(csv_path, index=False)
-                n_active = sum(1 for a in alerts
-                               if a.get("status") in ("BREAKOUT TRIGGERED","Burst Active"))
-                mkt_str = market_trend if nifty_d is not None else "?"
-                cap = (f"30-min {_ist()} | {len(quick_df)} signals | "
-                       f"{n_active} new alerts | Market: {mkt_str}")
-                send_telegram_file(csv_path, cap)
-                log.info(f"CSV sent: {csv_path}")
-            else:
-                log.info("No signals in quick_df — CSV skipped")
-        elif not alerts:
-            log.info("No new signals this round")
+                send_telegram(f"<b>30-min {_ist()}</b>\nNo new signals | {mkt_str} | {elapsed_hh:.0f}s")
+            cap = f"30-min {_ist()} | {len(quick_df)} signals | {n_active} active | {mkt_str} | {elapsed_hh:.0f}s"
+            send_telegram_file(csv_path, cap)
         return
 
-    # ---- DAILY / TEST MODE ----
+    # ==============================================================
+    # DAILY / TEST MODE
+    # ==============================================================
     con = get_db()
     t0 = time.time()
     scan_label = "TEST" if args.test else "DAILY"
-    _scan_time = _ist("%H:%M"); log.info(f"=== {scan_label} {_today()} {_scan_time} ===")
+    log.info(f"=== {scan_label} {_today()} {_ist('%H:%M')} ===")
+    prefix = "test" if args.test else "scan"
 
     stocks = load_universe()
     if args.test:
-        stocks = ["RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS","ADANIENT.NS",
-                  "TATAMOTORS.NS","BAJFINANCE.NS","ICICIBANK.NS","SBIN.NS","LT.NS"]
+        # 25 diverse stocks — mix of large + growth + momentum, much more likely to trigger
+        stocks = [
+            "RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS","ICICIBANK.NS",
+            "TATAMOTORS.NS","BAJFINANCE.NS","SBIN.NS","LT.NS","ADANIENT.NS",
+            "ZOMATO.NS","DIXON.NS","POLYCAB.NS","ASTRAL.NS","DEEPAKNTR.NS",
+            "KPITTECH.NS","TATAELXSI.NS","IRCTC.NS","TITAN.NS","PAGEIND.NS",
+            "HAL.NS","BEL.NS","HFCL.NS","SUZLON.NS","IRFC.NS",
+        ]
 
     log.info(f"{len(stocks)} stocks to scan")
-
-    # ── Warm-up price cache (incremental — only downloads what's new) ──────
-    # On first ever run: downloads 1y for all stocks (~15-20 min)
-    # On subsequent runs: only downloads last 7d (~3-4 min total)
     warm_cache(stocks, workers=MAX_WORKERS)
 
-    ftd_active = False; market_trend = "Unknown"
-    if nifty_d is not None:
-        ftd_active, ftd_note = check_follow_through_day(nifty_d)
-        market_trend = check_market_trend(nifty_d["Close"].values)
-        log.info(f"Market: {market_trend} | FTD: {ftd_active} ({ftd_note})")
-
     all_rows = []; ok_count = 0; fund_fails = 0
-
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futs = {ex.submit(scan_stock, s, nifty_d, ftd_active, market_trend,
-                                   aggression=aggression): s for s in stocks}
+                          aggression=aggression): s for s in stocks}
         for i, fut in enumerate(as_completed(futs)):
             if (i+1) % 200 == 0:
                 log.info(f"  {i+1}/{len(stocks)} | signals: {len(all_rows)}")
@@ -2714,100 +2766,106 @@ def main():
                 ok_count += 1
                 if not fund_ok: fund_fails += 1
                 if rows: all_rows.extend(rows)
-            except Exception: pass
+            except Exception as _scan_ex:
+                if ok_count == 0 and i < 5:   # log first few crashes to diagnose
+                    log.error(f"scan_stock({futs.get(fut,'?')}) CRASH: {type(_scan_ex).__name__}: {_scan_ex}")
 
     elapsed = time.time() - t0
     log.info(f"Done: {elapsed/60:.1f}m | {ok_count}/{len(stocks)} OK | "
              f"fund_miss={fund_fails} | {len(all_rows)} signals")
 
+    # ── ALWAYS save CSV — even on 0 signals ──────────────────────────────────
     if not all_rows:
-        log.info("No signals."); con.close(); return
+        log.warning("0 signals — saving status CSV")
+        empty_df = pd.DataFrame([{
+            "scan_date": str(_today()), "scan_time": _ist("%H:%M"),
+            "scan_mode": scan_label, "stock": "NO_SIGNALS", "pattern": "—",
+            "recommendation": "—",
+            "notes": f"0 signals | {ok_count}/{len(stocks)} stocks | {elapsed/60:.1f}m | {market_trend}",
+        }])
+        csv_path = _save_csv(empty_df, prefix, f"0 signals | {ok_count}/{len(stocks)} scanned")
+        if _tg_ok() or args.telegram:
+            _send_tg(
+                f"<b>NSE {scan_label} {_ist()}</b>\n\u26a0\ufe0f 0 signals\n"
+                f"{ok_count}/{len(stocks)} scanned | {elapsed/60:.1f}m | {market_trend}",
+                csv_path, f"NSE {scan_label} {_today()} — 0 signals")
+        con.close(); return
 
     raw = (pd.DataFrame(all_rows)
            .drop_duplicates(subset=["stock","pattern","timeframe"])
            .reset_index(drop=True))
 
     def _score(r):
-        cs   = (r.get("canslim_score") or 0)
-        q    = (r.get("quality") or 0) * 100
-        vs   = min(r.get("vol_surge") or 1, 5) / 5
-        rr   = min(r.get("risk_reward") or 0, 5) / 5
-        rw   = {"BUY — strong":3,"BUY — moderate":2,
-                "WATCH — await breakout":1.5,"WATCH — mixed":1}.get(r.get("recommendation",""),0)
-        rs   = min(r.get("rs_percentile") or 50, 100) / 100
-        ti   = 0.3 if (r.get("m3") or 0) >= 1.05 else 0
-        nb   = 0.2 if (r.get("m4") or 0) >= 1.0 else 0
-        cb   = 0.5 if r.get("converging") else 0
-        s2   = 0.3 if "Stage2" in str(r.get("stage","")) else 0
-        vd   = 0.2 if r.get("vol_dryup") else 0
-        # v4.3 fundamental bonuses
-        ps   = (r.get("promoter_score") or 0.5) * 0.25
-        es   = (r.get("earnings_score") or 0.5) * 0.15
-        lf   = 0.2 if r.get("low_float") else 0
-        ins  = 0.4 if r.get("insider_deal") else 0
-        ea   = 0.2 if r.get("eps_accelerating") else 0
-        # Pledging PENALTY
-        pledge_pen = -min((r.get("pledging_pct") or 0) / 30, 1) * 0.5
-        # Win rate bonus
+        cs  = (r.get("canslim_score") or 0)
+        q   = (r.get("quality") or 0) * 100
+        vs  = min(r.get("vol_surge") or 1, 5) / 5
+        rr  = min(r.get("risk_reward") or 0, 5) / 5
+        rw  = {"BUY \u2014 strong":3,"BUY \u2014 moderate":2,
+               "WATCH \u2014 await breakout":1.5,"WATCH \u2014 mixed":1}.get(r.get("recommendation",""),0)
+        rs  = min(r.get("rs_percentile") or 50, 100) / 100
+        ti  = 0.3 if (r.get("m3") or 0) >= 1.05 else 0
+        nb  = 0.2 if (r.get("m4") or 0) >= 1.0  else 0
+        cb  = 0.5 if r.get("converging") else 0
+        s2  = 0.3 if "Stage2" in str(r.get("stage","")) else 0
+        vd  = 0.2 if r.get("vol_dryup") else 0
+        ps  = (r.get("promoter_score") or 0.5) * 0.25
+        es  = (r.get("earnings_score") or 0.5) * 0.15
+        lf  = 0.2 if r.get("low_float") else 0
+        ins = 0.4 if r.get("insider_deal") else 0
+        ea  = 0.2 if r.get("eps_accelerating") else 0
+        pp  = -min((r.get("pledging_pct") or 0) / 30, 1) * 0.5
         wr_n = r.get("notes") or ""
         wr_b = 0.2 if any(f"WIN:{x}" in wr_n for x in ["7","8","9"]) else 0
         return (cs*0.18 + q*0.15 + rw*0.15 + rs*0.08 + vs*0.07 + rr*0.05
-                + ps + es + lf + ins + ea + ti+nb+cb+s2+vd + pledge_pen + wr_b)
+                + ps + es + lf + ins + ea + ti+nb+cb+s2+vd + pp + wr_b)
 
     raw["_score"] = raw.apply(_score, axis=1)
     df = raw.sort_values("_score", ascending=False).drop(columns=["_score"]).reset_index(drop=True)
+    buys   = df[df["recommendation"].str.startswith("BUY",   na=False)]
+    watches= df[df["recommendation"].str.startswith("WATCH", na=False)]
 
-    # Save to DB
-    db_execmany(con, """INSERT INTO signals
-        (scan_date,scan_time,scan_mode,stock,name,sector,cap_class,cap_cr,
-         pattern,timeframe,status,breakout_zone,cmp,stop_loss,
-         target_1,target_2,target_3,risk_reward,quality,vol_surge,
-         canslim_score,data_completeness,rs_percentile,dist_52wk_pct,pos_shares,pos_value,converging,leg,
-         earnings_near,ftd_active,vol_dryup,stage,recommendation,m1,m2,m3,m4,m5,notes)
-        VALUES (:scan_date,:scan_time,:scan_mode,:stock,:name,:sector,:cap_class,:cap_cr,
-         :pattern,:timeframe,:status,:breakout_zone,:cmp,:stop_loss,
-         :target_1,:target_2,:target_3,:risk_reward,:quality,:vol_surge,
-         :canslim_score,:data_completeness,:rs_percentile,:dist_52wk_pct,:pos_shares,:pos_value,:converging,:leg,
-         :earnings_near,:ftd_active,:vol_dryup,:stage,:recommendation,:m1,:m2,:m3,:m4,:m5,:notes)""",
-                df.to_dict("records"))
+    # ── DB (skip for test) ────────────────────────────────────────────────────
+    if not args.test:
+        db_execmany(con, """INSERT INTO signals
+            (scan_date,scan_time,scan_mode,stock,name,sector,cap_class,cap_cr,
+             pattern,timeframe,status,breakout_zone,cmp,stop_loss,
+             target_1,target_2,target_3,risk_reward,quality,vol_surge,
+             canslim_score,data_completeness,rs_percentile,dist_52wk_pct,pos_shares,pos_value,converging,leg,
+             earnings_near,ftd_active,vol_dryup,stage,recommendation,m1,m2,m3,m4,m5,notes)
+            VALUES (:scan_date,:scan_time,:scan_mode,:stock,:name,:sector,:cap_class,:cap_cr,
+             :pattern,:timeframe,:status,:breakout_zone,:cmp,:stop_loss,
+             :target_1,:target_2,:target_3,:risk_reward,:quality,:vol_surge,
+             :canslim_score,:data_completeness,:rs_percentile,:dist_52wk_pct,:pos_shares,:pos_value,:converging,:leg,
+             :earnings_near,:ftd_active,:vol_dryup,:stage,:recommendation,:m1,:m2,:m3,:m4,:m5,:notes)""",
+                    df.to_dict("records"))
+        db_exec(con, """INSERT INTO runs
+            (scan_date,scan_time,mode,stocks_total,stocks_ok,signals,buys,elapsed_sec)
+            VALUES (?,?,?,?,?,?,?,?)""",
+                (str(_today()), _ist("%H:%M"), scan_label,
+                 len(stocks), ok_count, len(df), len(buys), round(elapsed,1)))
 
-    # Update watchlist JSON (persisted via git commit in workflow)
-    wl_items = []
-    for _, r in df.iterrows():
-        wl_items.append({
-            "stock": r["stock"], "name": r.get("name"), "sector": r.get("sector"),
-            "cap_class": r.get("cap_class"), "pattern": r["pattern"],
-            "breakout_zone": r.get("breakout_zone"), "stop_loss": r.get("stop_loss"),
-            "status": r.get("status"), "added_date": str(_today()),
-        })
-    # Merge with existing (keep entries from last 30 days, dedup by stock+pattern)
+    # ── Watchlist ─────────────────────────────────────────────────────────────
+    wl_items = [{"stock": r["stock"], "name": r.get("name"), "sector": r.get("sector"),
+                 "cap_class": r.get("cap_class"), "pattern": r["pattern"],
+                 "breakout_zone": r.get("breakout_zone"), "stop_loss": r.get("stop_loss"),
+                 "status": r.get("status"), "added_date": str(_today())}
+                for _, r in df.iterrows()]
     existing_wl = {f"{w['stock']}_{w['pattern']}": w for w in load_watchlist()}
-    for item in wl_items:
-        existing_wl[f"{item['stock']}_{item['pattern']}"] = item
+    for item in wl_items: existing_wl[f"{item['stock']}_{item['pattern']}"] = item
     save_watchlist(list(existing_wl.values()))
 
-    buys = df[df["recommendation"].str.startswith("BUY", na=False)]
-    watches = df[df["recommendation"].str.startswith("WATCH", na=False)]
-    db_exec(con, """INSERT INTO runs
-        (scan_date,scan_time,mode,stocks_total,stocks_ok,signals,buys,elapsed_sec)
-        VALUES (?,?,?,?,?,?,?,?)""",
-            (str(_today()), _ist("%H:%M"), scan_label,
-             len(stocks), ok_count, len(df), len(buys), round(elapsed,1)))
+    # ── ALWAYS save CSV ───────────────────────────────────────────────────────
+    csv_path = _save_csv(df, prefix,
+        f"BUY:{len(buys)} WATCH:{len(watches)} TOTAL:{len(df)} | {market_trend} | {elapsed/60:.1f}m")
 
-    # Save CSV
-    _csv_hm = _ist("%H%M"); csv_path = os.path.join(OUTPUT_DIR, f"scan_{_today()}_{_csv_hm}.csv")
-    df.to_csv(csv_path, index=False)
-    log.info(f"CSV saved → {csv_path}")
-
-    log.info(f"\nBUY: {len(buys)} | WATCH: {len(watches)}")
+    # ── Console ───────────────────────────────────────────────────────────────
+    log.info(f"BUY: {len(buys)} | WATCH: {len(watches)} | Total: {len(df)}")
     log.info(f"\n{df['pattern'].value_counts().to_string()}")
-
     conv = df[df["converging"].notna()]
     if len(conv):
-        log.info("Convergence:")
-        for s in conv["stock"].unique():
-            log.info(f"  {s}: {conv[conv['stock']==s]['converging'].iloc[0]}")
-
+        log.info("Convergence: " + " | ".join(
+            f"{s}:{conv[conv['stock']==s]['converging'].iloc[0]}"
+            for s in conv["stock"].unique()[:10]))
     if len(buys):
         print("\n--- TOP BUYS ---")
         cols = ["stock","cap_class","pattern","status","cmp","breakout_zone","stop_loss",
@@ -2815,14 +2873,12 @@ def main():
                 "recommendation","notes"]
         print(buys[[c for c in cols if c in buys.columns]].head(20).to_string(index=False))
 
-    if args.telegram:
-        # Send text alert
+    # ── TG: auto if env set OR --telegram passed ──────────────────────────────
+    if _tg_ok() or args.telegram:
         send_telegram(fmt_daily(df, market_trend, ftd_active))
-        # Send full CSV as file
-        _cap_time = _ist("%H:%M")
-        caption = (f"NSE Scanner {_today()} {_cap_time} | "
-                   f"BUY: {len(buys)} | WATCH: {len(watches)} | "
-                   f"Total: {len(df)} signals | Market: {market_trend}")
+        caption = (f"NSE {scan_label} {_today()} {_ist('%H:%M')} | "
+                   f"BUY:{len(buys)} WATCH:{len(watches)} Total:{len(df)} | "
+                   f"{market_trend} | {elapsed/60:.1f}m")
         send_telegram_file(csv_path, caption)
 
     con.close()
