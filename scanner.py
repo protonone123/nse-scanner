@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NSE Live Pattern Scanner v4.3
+NSE Live Pattern Scanner v3.6
 ==============================
 Fixes from v3.2 (what you saw failing in GitHub Actions):
   1. DB PERSISTENCE — GitHub Actions is stateless. Each run is a fresh container.
@@ -43,21 +43,6 @@ import pandas as pd
 import numpy as np
 from scipy.signal import find_peaks
 from scipy.stats import percentileofscore
-from functools import lru_cache as _lru
-# fundamentals module — imported lazily to avoid circular imports
-try:
-    # from fundamentals import — DISABLED to avoid 401 rate limits
-    _FUND_MODULE = False  # Disabled
-except ImportError:
-    _FUND_MODULE = False
-
-# Fallback stubs (fundamentals disabled)
-def get_fundamentals(sym, **kw): return {}
-def get_bulk_deals_today(): return {}
-def promoter_quality_score(f): return 0.5
-def earnings_quality_score(f): return 0.5
-def is_low_float(f): return False
-def has_insider_activity(*a): return False, None, None
 
 # ================================================================
 # PATHS & LOGGING
@@ -89,10 +74,8 @@ log = logging.getLogger("scanner")
 # CONFIG
 # ================================================================
 NIFTY_SYM    = "^NSEI"
-PERIOD_DAILY = "2y"   # extended: 500 bars daily now available
-STALE_DAYS   = 5
-WEEKLY_WINDOWS = [26, 52, 104, 156]   # weekly bar windows (6mo/1yr/2yr/3yr)
-MONTHLY_WINDOWS = [12, 24, 36, 60]    # monthly bar windows     # re-fetch full history if cache is older than this
+PERIOD_DAILY = "1y"
+STALE_DAYS   = 5     # re-fetch full history if cache is older than this
 PERIOD_QUICK = "3mo"
 MAX_WORKERS  = 4
 DL_RETRIES   = 3
@@ -103,31 +86,23 @@ TG_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 TG_CHAT  = os.environ.get("TG_CHAT_ID", "")
 
 CS = {
-    # Fundamental checks (C, A, I) are DISABLED → max achievable score from
-    # price-only checks (N + L_rs + market + liquidity) = 3 in bull, 2 in bear.
-    # Thresholds calibrated accordingly.
     "C_min": 0.25, "A_min": 0.25, "N_max_from_high": 0.15,
-    "L_min_rs": 1.05,   # was 1.10 — slightly relaxed RS hurdle
-    "I_min_instl": 0.20,
-    "buy_strong": 3,    # was 6 — unreachable without fundamentals
-    "buy_moderate": 2,  # was 4 — unreachable without fundamentals
+    "L_min_rs": 1.10, "I_min_instl": 0.20,
+    "buy_strong": 6, "buy_moderate": 4,
 }
 
 # ── Trading filters ────────────────────────────────────────────────────────────
-MIN_LIQUIDITY_CR   = 2.0    # min avg daily turnover ₹ Cr (2 Cr = ~₹20M — captures most tradeable stocks)
+MIN_LIQUIDITY_CR   = 15.0   # min avg daily turnover ₹ Cr (was 1 — too loose)
 MIN_DIST_52WK_PCT  = 0.00   # stock must be within this % of 52wk high (0 = no filter)
-MAX_DIST_52WK_PCT  = 0.50   # within 50% of 52-week high (relaxed: bear mkt bases form deeper)
+MAX_DIST_52WK_PCT  = 0.30   # within 30% of 52-week high (Minervishi rule N)
 MAX_STOP_PCT       = 0.08   # max stop loss from entry (8% — Minervishi hard limit)
-MIN_RS_PERCENTILE  = 30     # min relative-strength percentile vs universe (relaxed from 40)
+MIN_RS_PERCENTILE  = 40     # min relative-strength percentile vs universe
 INDIA_VIX_SYM      = "^INDIAVIX"
 VIX_HIGH_THRESH    = 22.0   # if VIX > this: reduce aggression, flag as "High Fear"
-VIX_EXTREME_THRESH = 30.0
-PORTFOLIO_VALUE    = float(os.environ.get("PORTFOLIO_VALUE", "1000000"))
-RISK_PCT_PER_TRADE = 0.01   # if VIX > this: suppress BUY-strong signals
+VIX_EXTREME_THRESH = 30.0   # if VIX > this: suppress BUY-strong signals
 HALFHOUR_CONFIRM_HOUR = 13  # MomBurst halfhour alerts suppressed before 1 PM IST
 
-INTRADAY_DETECTORS = {"MomBurst", "EpisodicPivot", "PocketPivot", "ORB", "VWAPReclaim"}
-RESAMPLE_TFS = ["30m", "45m", "75m"]
+INTRADAY_DETECTORS = {"MomBurst", "EpisodicPivot", "PocketPivot"}
 
 # ================================================================
 # NIFTY 500 FALLBACK — used when NSE URL is blocked (GitHub IPs)
@@ -200,17 +175,6 @@ def get_db():
             vol_dryup INTEGER, stage TEXT,
             recommendation TEXT,
             m1 REAL, m2 REAL, m3 REAL, m4 REAL, m5 REAL,
-            pos_shares INTEGER DEFAULT 0, pos_value REAL DEFAULT 0,
-            pattern_detail TEXT, promoter_score REAL, earnings_score REAL,
-            low_float INTEGER DEFAULT 0, insider_deal INTEGER DEFAULT 0,
-            deal_value_cr REAL, deal_type TEXT,
-            pe_ratio REAL, pb_ratio REAL, roe REAL, roce REAL,
-            revenue_growth_yoy REAL, revenue_growth_3yr REAL,
-            promoter_pct REAL, pledging_pct REAL, debt_equity REAL,
-            free_float_pct REAL, piotroski_score INTEGER,
-            eps_accelerating INTEGER DEFAULT 0,
-            rsi_14 REAL, atr_pct REAL, above_200ma_wk INTEGER DEFAULT 0,
-            weekly_trend TEXT, monthly_trend TEXT,
             notes TEXT,
             created_at TEXT DEFAULT (datetime('now','localtime'))
         );
@@ -237,11 +201,6 @@ def get_db():
         );
         CREATE INDEX IF NOT EXISTS idx_sig_date ON signals(scan_date);
         CREATE INDEX IF NOT EXISTS idx_sig_stock ON signals(stock);
-        CREATE TABLE IF NOT EXISTS gap_signals (
-            scan_date TEXT NOT NULL, stock TEXT NOT NULL,
-            gap_pct REAL, open_price REAL, prev_close REAL, volume REAL,
-            PRIMARY KEY (scan_date, stock)
-        );
         CREATE INDEX IF NOT EXISTS idx_alerts ON alerts_sent(scan_date,stock);
     """)
     # ── Schema migration: add columns that may be missing from older DB ──────
@@ -416,21 +375,30 @@ def _get_cache():
 
 
 def _cache_read(stock: str) -> pd.DataFrame | None:
-    """Load cached daily OHLCV for a stock. Filters tf='1d' in multi-TF schema."""
+    """Load cached daily OHLCV. Handles both old schema (no tf) and new multi-TF schema."""
     try:
         con = _get_cache()
+        # Try new multi-TF schema first (data_updater v4+ uses tf column)
         try:
             df = pd.read_sql(
                 "SELECT date,open,high,low,close,volume FROM price_cache "
                 "WHERE stock=? AND tf='1d' ORDER BY date",
                 con, params=(stock,)
             )
+            if len(df) >= 20:
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.set_index("date")
+                df.columns = ["Open","High","Low","Close","Volume"]
+                df.index.name = None
+                return df.astype(float)
         except Exception:
-            df = pd.read_sql(
-                "SELECT date,open,high,low,close,volume FROM price_cache "
-                "WHERE stock=? ORDER BY date",
-                con, params=(stock,)
-            )
+            pass
+        # Fallback: old schema without tf column
+        df = pd.read_sql(
+            "SELECT date,open,high,low,close,volume FROM price_cache "
+            "WHERE stock=? ORDER BY date",
+            con, params=(stock,)
+        )
         if len(df) < 20:
             return None
         df["date"] = pd.to_datetime(df["date"])
@@ -443,7 +411,7 @@ def _cache_read(stock: str) -> pd.DataFrame | None:
 
 
 def read_cache(stock: str, tf: str = "1d", limit: int = 9999) -> pd.DataFrame | None:
-    """Multi-TF cache read — matches data_updater schema (stock, tf, date)."""
+    """Multi-TF cache read for weekly/monthly/intraday bars (data_updater schema)."""
     try:
         con = _get_cache()
         try:
@@ -465,7 +433,7 @@ def read_cache(stock: str, tf: str = "1d", limit: int = 9999) -> pd.DataFrame | 
         df = df.iloc[::-1].reset_index(drop=True)
         df["date"] = pd.to_datetime(df["date"])
         df = df.set_index("date")
-        df.columns = ["Open", "High", "Low", "Close", "Volume"]
+        df.columns = ["Open","High","Low","Close","Volume"]
         df.index.name = None
         return df.astype(float)
     except Exception as e:
@@ -474,40 +442,41 @@ def read_cache(stock: str, tf: str = "1d", limit: int = 9999) -> pd.DataFrame | 
 
 
 def _cache_write(stock: str, df: pd.DataFrame, tf: str = "1d"):
-    """Write/upsert OHLCV rows. Supports multi-TF schema (stock,tf,date)."""
+    """Write/upsert OHLCV rows. Supports both old schema and new multi-TF schema."""
     if df is None or len(df) == 0:
         return
     try:
         con = _get_cache()
-        rows = []
+        rows_new = []   # (stock, tf, date, o, h, l, c, v)
+        rows_old = []   # (stock, date, o, h, l, c, v)
         for idx, row in df.iterrows():
             date_str = str(idx.date()) if hasattr(idx, "date") else str(idx)[:10]
-            rows.append((
-                stock, tf, date_str,
-                float(row.get("Open", row.get("open", 0)) or 0),
-                float(row.get("High", row.get("high", 0)) or 0),
-                float(row.get("Low",  row.get("low",  0)) or 0),
-                float(row.get("Close",row.get("close",0)) or 0),
+            vals = (
+                float(row.get("Open",  row.get("open",  0)) or 0),
+                float(row.get("High",  row.get("high",  0)) or 0),
+                float(row.get("Low",   row.get("low",   0)) or 0),
+                float(row.get("Close", row.get("close", 0)) or 0),
                 float(row.get("Volume",row.get("volume",0)) or 0),
-            ))
+            )
+            rows_new.append((stock, tf, date_str) + vals)
+            rows_old.append((stock, date_str) + vals)
         with _cache_lock:
             try:
                 con.executemany(
                     "INSERT OR REPLACE INTO price_cache "
                     "(stock,tf,date,open,high,low,close,volume) VALUES (?,?,?,?,?,?,?,?)",
-                    rows
+                    rows_new
                 )
             except Exception:
-                old_rows = [(r[0],) + r[2:] for r in rows]
                 con.executemany(
                     "INSERT OR REPLACE INTO price_cache "
                     "(stock,date,open,high,low,close,volume) VALUES (?,?,?,?,?,?,?)",
-                    old_rows
+                    rows_old
                 )
             con.execute(
                 "INSERT OR REPLACE INTO cache_meta (stock,last_updated,bar_count) "
                 "VALUES (?,?,?)",
-                (stock, str(_today()), len(rows))
+                (stock, str(_today()), len(rows_new))
             )
             con.commit()
     except Exception as e:
@@ -622,8 +591,14 @@ def dl_cached(sym: str, period: str = PERIOD_DAILY) -> pd.DataFrame | None:
 
 
 def dl_fund_cached(sym: str) -> dict:
-    """Fundamentals disabled — OHLCV-only mode."""
-    return {}
+    """Fundamentals with same-day cache. Avoids hitting Yahoo 2000× per daily scan."""
+    cached = _fund_cache_read(sym)
+    if cached is not None:
+        return cached
+    fund = dl_fund(sym)  # raw fetch
+    if fund.get("_fund_ok"):
+        _fund_cache_write(sym, fund)
+    return fund
 
 
 def warm_cache(stocks: list, workers: int = 8):
@@ -712,7 +687,40 @@ def dl(sym, interval="1d", period=PERIOD_DAILY):
     return None
 
 def dl_fund(sym):
-    """Fundamentals disabled — returns empty dict to avoid 401 rate limit errors."""
+    for attempt in range(DL_RETRIES):
+        try:
+            sess = _get_session()
+            kw = {"session": sess} if sess is not None else {}
+            tk = yf.Ticker(sym, **kw)
+            info = tk.info or {}
+            if not info.get("marketCap"):
+                if attempt < DL_RETRIES - 1:
+                    time.sleep(3)
+                    continue
+                return {"_fund_ok": False}
+            try:
+                cal = tk.calendar
+                ne = cal.get("Earnings Date", [None])[0] if cal else None
+            except Exception:
+                ne = None
+            return {
+                "_fund_ok": True,
+                "marketCap": info.get("marketCap"),
+                "earningsQuarterlyGrowth": info.get("earningsQuarterlyGrowth"),
+                "earningsGrowth": info.get("earningsGrowth"),
+                "heldPercentInstitutions": info.get("heldPercentInstitutions"),
+                "sector": info.get("sector"),
+                "longName": info.get("longName") or info.get("shortName"),
+                "next_earnings": str(ne) if ne else None,
+            }
+        except Exception as e:
+            msg = str(e)
+            if "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
+                log.warning(f"401/Crumb on fund {sym} attempt {attempt+1} — reset session")
+                _reset_session()
+                time.sleep(5)
+            elif attempt < DL_RETRIES - 1:
+                time.sleep(DL_BACKOFF * (attempt + 1))
     return {"_fund_ok": False}
 
 def cap_class(mc):
@@ -891,32 +899,19 @@ def canslim_score(close, vol, fund, nc, nr):
 
 def recommend(status, score, mkt_up, aggression=2, rs_pct=None):
     """
-    Signal recommendation based on pattern status, CANSLIM score, market regime.
-    aggression: 0=Bear, 1=Choppy/Cautious, 2=Uptrend, 3=Bull
-    NOTE: fundamentals disabled → max score ~3. Thresholds calibrated for price-only.
+    FIX: respect market regime aggression (0=Bear,1=Cautious,2=Uptrend,3=Bull).
+    Bear (aggression=0): no BUY signals. RS filter applied for BUY-strong.
     """
-    bo = any(k in status for k in ["Breakout","Burst","Pivot","Pocket","Reclaim","ORB"])
+    bo = any(k in status for k in ["Breakout","Burst","Pivot","Pocket"])
+    if aggression == 0: return "WATCH — bear mkt" if score >= CS["buy_moderate"] else "AVOID"
     rs_ok = rs_pct is None or rs_pct >= MIN_RS_PERCENTILE
-
-    # Bear market: still show WATCH for patterns (never full AVOID on detected pattern)
-    if aggression == 0:
-        if bo and rs_ok:
-            return "WATCH — bear mkt"
-        if score >= CS["buy_moderate"]:
-            return "WATCH — bear mkt"
-        return "WATCH — bear mkt"   # pattern was detected → always show it
-
     if bo and score >= CS["buy_strong"] and mkt_up and aggression >= 2 and rs_ok:
         return "BUY — strong"
     if bo and score >= CS["buy_moderate"] and aggression >= 1:
         return "BUY — moderate"
-    if bo:
-        return "WATCH — breakout setup"   # breakout pattern but score low → still watch
-    if score >= CS["buy_strong"]:
-        return "WATCH — await breakout"
-    if score >= CS["buy_moderate"]:
-        return "WATCH — mixed"
-    return "WATCH — low score"           # was AVOID — now always emit if pattern found
+    if not bo and score >= CS["buy_strong"]: return "WATCH — await breakout"
+    if score >= CS["buy_moderate"]: return "WATCH — mixed"
+    return "AVOID"
 
 # ================================================================
 # TARGETS
@@ -980,51 +975,6 @@ def calc_targets(pattern, bz, bottom, cmp, adr, close=None):
         rr   = round(reward / risk, 2) if risk > 0 else 0
 
     return stop, t1, t2, t3, rr
-
-
-def calc_position_size(entry: float, stop: float) -> dict:
-    """Minervishi: risk RISK_PCT_PER_TRADE of portfolio. Shares = max_loss / risk_per_share."""
-    if not entry or not stop or stop >= entry:
-        return {"shares": 0, "value": 0}
-    shares = int((PORTFOLIO_VALUE * RISK_PCT_PER_TRADE) / (entry - stop))
-    return {"shares": shares, "value": round(shares * entry, 0)}
-
-
-
-def _get_pattern_winrate(con, pattern: str, min_n: int = 10) -> float | None:
-    """Get historical 5-day win rate for a pattern from signal_outcomes."""
-    try:
-        row = con.execute(
-            "SELECT count(*) as n, "
-            "sum(case when return_5d > 0 then 1 else 0 end) as wins "
-            "FROM signal_outcomes WHERE pattern=? AND return_5d IS NOT NULL",
-            (pattern,)
-        ).fetchone()
-        if row and row[0] >= min_n:
-            return round(row[1]/row[0]*100, 0)
-    except Exception:
-        pass
-    return None
-
-def _calc_rsi14(close: list | None, period: int = 14) -> float | None:
-    """RSI using Wilder's smoothing method."""
-    if close is None or len(close) < period + 1:
-        return None
-    try:
-        deltas = np.diff(close[-(period*2):])
-        gains  = np.where(deltas > 0, deltas, 0.0)
-        losses = np.where(deltas < 0, -deltas, 0.0)
-        avg_gain = np.mean(gains[:period])
-        avg_loss = np.mean(losses[:period])
-        for i in range(period, len(gains)):
-            avg_gain = (avg_gain*(period-1) + gains[i]) / period
-            avg_loss = (avg_loss*(period-1) + losses[i]) / period
-        if avg_loss == 0:
-            return 100.0
-        rs = avg_gain / avg_loss
-        return round(100 - 100/(1+rs), 1)
-    except Exception:
-        return None
 
 def identify_leg(close, bz):
     if len(close) < 50 or not bz: return "Unknown"
@@ -1511,386 +1461,12 @@ def det_stage2bo(c, v):
                 bottom=round(float(np.min(c[-30:])),2), last=round(float(c[-1]),2), vs=vs,
                 m1=round((c[-1]/ma150-1)*100,2), m2=None, m3=None, m4=None, m5=None)
 
-
-def det_orb(c, v, timestamps=None):
-    """Opening Range Breakout — first 2 bars (9:15, 9:30) define range."""
-    n = len(c)
-    if n < 4: return None
-    or_high = np.max(c[:2]); or_low = np.min(c[:2])
-    if or_high <= or_low: return None
-    if c[-1] <= or_high * 1.001: return None
-    if v is not None and len(v) >= 2:
-        or_avg_vol = np.mean(v[:2])
-        if v[-1] < or_avg_vol * 1.5: return None
-    else:
-        or_avg_vol = 1
-    gain = (c[-1] - or_low) / or_low
-    vs_val = round(float(v[-1]/or_avg_vol),2) if v is not None and or_avg_vol > 0 else None
-    return dict(pattern="ORB", status="ORB Breakout", quality=round(gain,3),
-                bz=round(float(or_high),2), bottom=round(float(or_low),2),
-                last=round(float(c[-1]),2), vs=vs_val,
-                m1=round(gain*100,2), m2=round(or_high-or_low,2), m3=vs_val, m4=None, m5=None)
-
-
-def det_vwap_reclaim(c, v, vwap=None):
-    """VWAP Reclaim — dropped below VWAP then reclaimed with volume."""
-    n = len(c)
-    if n < 6: return None
-    if vwap is None:
-        # Approximate VWAP from available data
-        if v is None or len(v) == 0: return None
-        tp = c  # approximation without high/low
-        vwap = float(np.average(tp, weights=v)) if np.sum(v) > 0 else np.mean(c)
-    if vwap <= 0 or c[-1] <= vwap: return None
-    recently_below = any(c[i] < vwap for i in range(max(0,n-4), n-1))
-    if not recently_below: return None
-    vs_val = vsurge(v, n, lookback=10) if v is not None else None
-    if vs_val is None or vs_val < 1.2: return None
-    gain = (c[-1] - vwap) / vwap
-    return dict(pattern="VWAPReclaim", status="VWAP Reclaim",
-                quality=round(gain * vs_val, 4), bz=round(float(vwap),2),
-                bottom=round(float(vwap*0.995),2), last=round(float(c[-1]),2), vs=vs_val,
-                m1=round(gain*100,2), m2=vs_val, m3=round(vwap,2), m4=None, m5=None)
-
-
-# ================================================================
-# NEW PATTERN DETECTORS — v4.3
-# ================================================================
-
-def det_saucer_bottom(c, v):
-    """
-    Saucer Bottom (O'Neil) — very gradual curve over 3-7 months.
-    Shallower and wider than cup. Requires 120+ bars.
-    Volume must contract through saucer, expand on right side.
-    """
-    n = len(c)
-    if n < 120: return None
-    s = pd.Series(c).rolling(10, min_periods=1).mean().values
-    ti = int(np.argmin(s))
-    if not (n*0.25 <= ti <= n*0.75): return None
-    pk = max(s[:ti+1].max(), s[ti:].max())
-    tr = s[ti]
-    depth = (pk - tr) / pk
-    # Saucer is shallower than cup: 5-30% depth
-    if not (0.05 <= depth <= 0.30): return None
-    # Must be gradual — std of middle section should be low
-    mid = s[max(0, ti-20):ti+20]
-    flatness = np.std(mid) / np.mean(mid) if np.mean(mid) > 0 else 1
-    if flatness > 0.04: return None  # too jagged = cup not saucer
-    # Width check — saucer should be wider relative to depth
-    width_ratio = (n - ti) / (ti + 1)
-    if not (0.3 <= width_ratio <= 2.0): return None
-    # Volume contracting through middle, expanding on right
-    vol_ok = True
-    if v is not None and n >= 40:
-        left_vol = np.mean(v[:ti//2]) if ti > 10 else v[0]
-        mid_vol  = np.mean(v[ti-10:ti+10]) if ti > 10 else v[ti]
-        right_vol = np.mean(v[ti+1:]) if ti < n-5 else v[-1]
-        vol_ok = mid_vol < left_vol and right_vol > mid_vol
-    vs = vsurge(v, n)
-    bo = c[-1] >= pk * 0.98 and (vs is not None and vs >= 1.2)
-    try:
-        cx = np.arange(n); cf = np.polyfit(cx, s, 2)
-        r2 = 1 - np.sum((s - np.polyval(cf,cx))**2) / np.sum((s-np.mean(s))**2)
-        if cf[0] <= 0 or r2 < 0.40: return None
-    except: return None
-    return dict(pattern="SaucerBottom",
-                status="Breakout Ready" if bo else "Forming",
-                quality=round((r2 - flatness) * (1.1 if vol_ok else 0.8), 3),
-                bz=round(float(pk),2), bottom=round(float(tr),2),
-                last=round(float(c[-1]),2), vs=vs,
-                m1=round(depth*100,2), m2=round(flatness*100,2),
-                m3=round(width_ratio,2), m4=round(r2,3), m5=None)
-
-
-def det_power_trend(c, v):
-    """
-    Kell's Power Trend: 10 EMA > 20 EMA > 50 SMA > 200 SMA, all rising, 3+ sessions.
-    This is a REGIME detector, not a pattern. When active = buy any pullback.
-    """
-    n = len(c)
-    if n < 210: return None
-    s = pd.Series(c)
-    ema10  = s.ewm(span=10, adjust=False).mean().values
-    ema20  = s.ewm(span=20, adjust=False).mean().values
-    sma50  = s.rolling(50).mean().values
-    sma200 = s.rolling(200).mean().values
-    # Check last 3 bars have maintained power trend alignment
-    for i in [-1, -2, -3]:
-        if not (ema10[i] > ema20[i] > sma50[i] > sma200[i]):
-            return None
-    # All MAs rising (compare to 3 bars ago)
-    if not (ema10[-1] > ema10[-4] and ema20[-1] > ema20[-4] and
-            sma50[-1] > sma50[-4] and sma200[-1] > sma200[-4]):
-        return None
-    # Quality: how tight are the MAs (closer = stronger trend)
-    spread = (ema10[-1] - sma200[-1]) / sma200[-1]
-    if spread > 0.40: return None  # too extended from 200
-    vs = vsurge(v, n)
-    quality = round(1 - spread, 3)
-    return dict(pattern="PowerTrend",
-                status="Power Trend Active",
-                quality=quality,
-                bz=round(float(ema20[-1]),2),  # pullback to 20 EMA = entry
-                bottom=round(float(sma50[-1]),2),
-                last=round(float(c[-1]),2), vs=vs,
-                m1=round((c[-1]-sma200[-1])/sma200[-1]*100,2),
-                m2=round((ema10[-1]-ema20[-1])/ema20[-1]*100,2),
-                m3=round(spread*100,2), m4=None, m5=None)
-
-
-def det_weekly_vcp(c, v):
-    """
-    Weekly VCP (Minervishi's favourite setup).
-    Same logic as daily VCP but on weekly bars.
-    Windows [26,52,104] weeks applied externally.
-    Final contraction must be under 5% depth.
-    """
-    # Same as det_vcp but with tighter final contraction for weekly
-    n = len(c)
-    if n < 20: return None
-    atr = np.mean(np.abs(np.diff(c))) if n > 1 else np.mean(c)*0.01
-    prom = max(atr*1.5, np.mean(c)*0.01)
-    try:
-        highs, _ = find_peaks(c, prominence=prom, distance=3)
-        lows, _  = find_peaks(-c, prominence=prom, distance=3)
-    except: return None
-    if len(highs) < 2 or len(lows) < 2: return None
-    contractions = []
-    hl = list(highs) + [n]
-    for i, hi in enumerate(hl[:-1]):
-        nh = hl[i+1]
-        nl = lows[(lows > hi) & (lows < nh)]
-        lo = nl[0] if len(nl)>0 else (hi + int(np.argmin(c[hi:nh])) if nh-hi>=3 else -1)
-        if lo < 0 or lo >= n: continue
-        depth = (c[hi]-c[lo])/c[hi]
-        if depth < 0.03: continue
-        contractions.append((hi, lo, depth))
-    if len(contractions) < 2: return None  # weekly: 2 contractions enough
-    depths = [ct[2] for ct in contractions]
-    if not all(depths[i] <= depths[i-1]*0.85 for i in range(1,len(depths))): return None
-    # Weekly: final contraction STRICT < 5%
-    if depths[-1] > 0.05: return None
-    if contractions[-1][1] < n*0.5: return None
-    pivot = float(np.max(c[highs]))
-    vs = vsurge(v, n)
-    bo = c[-1] >= pivot*0.98 and (vs is not None and vs >= 1.5)
-    return dict(pattern="WeeklyVCP",
-                status="Breakout Ready" if bo else "Forming",
-                quality=round(1 - depths[-1], 3),
-                bz=round(pivot,2), bottom=round(float(c[contractions[-1][1]]),2),
-                last=round(float(c[-1]),2), vs=vs,
-                m1=round(depths[0]*100,2), m2=round(depths[-1]*100,2),
-                m3=len(contractions), m4=None, m5=None)
-
-
-def det_weekly_flat(c, v):
-    """
-    Weekly Flat Base — stock consolidates within 15% over 5-15 weeks.
-    O'Neil: flat base after 30%+ uptrend. Very tight = very bullish.
-    """
-    n = len(c)
-    if n < 10: return None
-    best = None
-    for bl in range(5, min(20, n)+1):
-        base = c[-bl:]
-        bh, blo = np.max(base), np.min(base)
-        br = (bh - blo) / bh if bh > 0 else 1
-        if br > 0.15: break  # weekly flat base: max 15% range
-        # Must have prior uptrend of 30%+ before the base
-        bs = n - bl
-        if bs < 10: continue
-        pre = c[max(0,bs-26):bs]  # last 6 months before base
-        if len(pre) < 5: continue
-        tg = (pre[-1] - np.min(pre)) / np.min(pre) if np.min(pre) > 0 else 0
-        if tg < 0.30: continue  # need 30%+ uptrend before
-        if best is None or br < best["br"]:
-            best = dict(bl=bl, bh=bh, blo=blo, br=br, tg=tg)
-    if best is None: return None
-    vs = vsurge(v, n)
-    bo = c[-1] >= best["bh"] * 0.99 and (vs is not None and vs >= 1.2)
-    return dict(pattern="WeeklyFlatBase",
-                status="Breakout Ready" if bo else "Forming",
-                quality=round(best["tg"] - best["br"], 3),
-                bz=round(float(best["bh"]),2), bottom=round(float(best["blo"]),2),
-                last=round(float(c[-1]),2), vs=vs,
-                m1=round(best["br"]*100,2), m2=round(best["tg"]*100,2),
-                m3=best["bl"], m4=None, m5=None)
-
-
-def det_monthly_stage2(c, v):
-    """
-    Monthly Stage 2 (Weinstein) — stock above rising 10-month MA.
-    The longest-term trend filter. Monthly Stage 2 stocks = safest buys.
-    Windows [24,36,60] months applied externally.
-    """
-    n = len(c)
-    if n < 15: return None
-    ma10 = np.mean(c[-min(10,n):])
-    ma10_prev = np.mean(c[-min(10,n)-3:-3]) if n >= 13 else ma10
-    # Must be above MA and MA must be rising
-    if c[-1] <= ma10: return None
-    if ma10 <= ma10_prev * 0.99: return None  # MA not rising
-    # 200-bar equivalent on monthly = ~16 years — use available
-    ma_long = np.mean(c[-min(n,24):])  # 2yr MA on monthly
-    above_long = c[-1] > ma_long
-    # How far into Stage 2
-    gain_from_ma = (c[-1] - ma10) / ma10
-    vs = vsurge(v, n)
-    return dict(pattern="MonthlyStage2",
-                status="Monthly Stage 2",
-                quality=round(gain_from_ma * (1.1 if above_long else 0.9), 3),
-                bz=round(float(ma10),2),
-                bottom=round(float(ma10 * 0.95),2),
-                last=round(float(c[-1]),2), vs=vs,
-                m1=round(gain_from_ma*100,2),
-                m2=round((ma10-ma10_prev)/ma10_prev*100,2) if ma10_prev>0 else None,
-                m3=1 if above_long else 0, m4=None, m5=None)
-
-
-def det_earnings_base(c, v):
-    """
-    Earnings Base (Minervishi) — post-EP tight consolidation.
-    After a gap-up (EP), stock consolidates tightly for 3-8 weeks.
-    The breakout from this base has highest win rate (fundamental already confirmed).
-    Needs recent price gap + subsequent tight base.
-    """
-    n = len(c)
-    if n < 15: return None
-    # Look for gap-up in last 60 bars
-    gap_idx = None
-    for i in range(max(0, n-60), n-8):
-        if i < 1: continue
-        gap = (c[i] - c[i-1]) / c[i-1] if c[i-1] > 0 else 0
-        if gap >= 0.05:  # 5%+ gap
-            gap_idx = i
-            break
-    if gap_idx is None: return None
-    # Check tight consolidation after gap
-    post_gap = c[gap_idx:]
-    if len(post_gap) < 6: return None
-    ph, pl = np.max(post_gap), np.min(post_gap)
-    base_range = (ph - pl) / ph if ph > 0 else 1
-    if base_range > 0.15: return None  # must be tight < 15%
-    # Must be holding above gap level
-    if c[-1] < c[gap_idx] * 0.95: return None
-    vs = vsurge(v, n)
-    bo = c[-1] >= ph * 0.99 and (vs is not None and vs >= 1.3)
-    return dict(pattern="EarningsBase",
-                status="Breakout Ready" if bo else "Tight Base",
-                quality=round((0.05 + (c[gap_idx]-c[gap_idx-1])/c[gap_idx-1]) - base_range, 3),
-                bz=round(float(ph),2), bottom=round(float(pl),2),
-                last=round(float(c[-1]),2), vs=vs,
-                m1=round((c[gap_idx]-c[gap_idx-1])/c[gap_idx-1]*100 if gap_idx>0 and c[gap_idx-1]>0 else 0,2),
-                m2=round(base_range*100,2), m3=n-gap_idx,
-                m4=None, m5=None)
-
-
-def det_ascending_base(c, v):
-    """
-    Ascending Base (O'Neil) — series of 3 bases, each base higher than prior.
-    Each base 10-20% range. Stock moves up between bases.
-    Very bullish: stock being accumulated, not distributed.
-    """
-    n = len(c)
-    if n < 40: return None
-    # Find 3 local highs and 3 local lows in sequence
-    try:
-        pks, _ = find_peaks(c, prominence=np.mean(c)*0.03, distance=5)
-        trs, _ = find_peaks(-c, prominence=np.mean(c)*0.03, distance=5)
-    except: return None
-    if len(pks) < 3 or len(trs) < 3: return None
-    # Check ascending: each trough higher than prior trough
-    tr_c = c[trs]
-    pk_c = c[pks]
-    # Last 3 troughs ascending
-    if not all(tr_c[-3+i] < tr_c[-3+i+1] for i in range(2)):
-        return None
-    # Last 3 peaks ascending
-    if not all(pk_c[-3+i] < pk_c[-3+i+1] for i in range(2)):
-        return None
-    # Each base range should be 10-20%
-    last_base_range = (pk_c[-1] - tr_c[-1]) / pk_c[-1] if pk_c[-1]>0 else 1
-    if not (0.05 <= last_base_range <= 0.25): return None
-    vs = vsurge(v, n)
-    bo = c[-1] >= pk_c[-1] * 0.99 and (vs is not None and vs >= 1.2)
-    return dict(pattern="AscendingBase",
-                status="Breakout Ready" if bo else "Forming",
-                quality=round(tr_c[-1]/tr_c[-3] - 1, 3),  # how much each base higher
-                bz=round(float(pk_c[-1]),2), bottom=round(float(tr_c[-1]),2),
-                last=round(float(c[-1]),2), vs=vs,
-                m1=round(last_base_range*100,2),
-                m2=round((tr_c[-1]-tr_c[-3])/tr_c[-3]*100 if tr_c[-3]>0 else 0,2),
-                m3=len(pks), m4=len(trs), m5=None)
-
-
-def det_rs_new_high(c, v, nc=None):
-    """
-    RS New High — stock making 52-week high while sector/market is NOT.
-    Most powerful confirmation of a sector leader.
-    Requires market close array nc for comparison.
-    """
-    n = len(c)
-    if n < 252: return None
-    # Stock at/near 52-week high
-    hi52 = np.max(c[-252:])
-    if (hi52 - c[-1]) / hi52 > 0.03: return None  # must be within 3% of high
-    # Market NOT at 52-week high
-    if nc is not None and len(nc) >= 252:
-        mkt_hi52 = np.max(nc[-252:])
-        mkt_near_high = (mkt_hi52 - nc[-1]) / mkt_hi52 < 0.05
-        if mkt_near_high: return None  # market also at high = not a leader
-    # RS calc: stock 1yr return vs market 1yr return
-    stock_ret = (c[-1] - c[-252]) / c[-252] if c[-252] > 0 else 0
-    mkt_ret = (nc[-1] - nc[-252]) / nc[-252] if nc is not None and len(nc)>=252 and nc[-252]>0 else 0
-    rs_vs_mkt = stock_ret - mkt_ret
-    if rs_vs_mkt < 0.10: return None  # must outperform by 10%+
-    vs = vsurge(v, n)
-    return dict(pattern="RSNewHigh",
-                status="RS Leader",
-                quality=round(rs_vs_mkt, 3),
-                bz=round(float(hi52),2), bottom=round(float(c[-52:].min()),2),
-                last=round(float(c[-1]),2), vs=vs,
-                m1=round(stock_ret*100,2), m2=round(mkt_ret*100,2),
-                m3=round(rs_vs_mkt*100,2), m4=None, m5=None)
-
-
-def det_low_float_momentum(c, v, fund=None):
-    """
-    Low Float Momentum (Qullamaggie) — ADR>5% + float<20% + momentum burst.
-    Low float stocks with high ADR make explosive moves.
-    """
-    n = len(c)
-    if n < 20 or v is None: return None
-    # ADR > 5%
-    adr = calc_adr(c)
-    if adr < 5.0: return None
-    # Low float check from fundamentals
-    if fund and not is_low_float(fund): return None
-    # Momentum: up 3%+ today or in last 3 days
-    if c[-2] <= 0: return None
-    day_gain = (c[-1] - c[-2]) / c[-2]
-    if day_gain < 0.03: return None
-    # Volume surge
-    vs = vsurge(v, n)
-    if vs is None or vs < 1.5: return None
-    # Above 50 MA
-    ma50 = np.mean(c[-min(50,n):])
-    if c[-1] < ma50: return None
-    return dict(pattern="LowFloatMomentum",
-                status="Burst Active",
-                quality=round(day_gain * vs, 4),
-                bz=round(float(c[-1]),2), bottom=round(float(c[-2]),2),
-                last=round(float(c[-1]),2), vs=vs,
-                m1=round(adr,2), m2=round(day_gain*100,2),
-                m3=vs, m4=None, m5=None)
-
 DETECTORS = {
-    "CupHandle": (det_cup, [60,80,120,180,250,350,500]),
-    "VCP": (det_vcp, [60,80,120,180,250,350,500]),
-    "FlatBase": (det_fb, [40,60,80,120,180,250,350]),
-    "InvHS": (det_ihs, [60,80,120,180,250,350,500]),
-    "DoubleBottom": (det_dbot, [40,60,100,150,200,300,400]),
+    "CupHandle": (det_cup, [60,80,120,180,250]),
+    "VCP": (det_vcp, [60,80,120,180,250]),
+    "FlatBase": (det_fb, [40,60,80,120,180]),
+    "InvHS": (det_ihs, [60,80,120,180,250]),
+    "DoubleBottom": (det_dbot, [40,60,100,150,200]),
     "AscTriangle": (det_asctri, [30,50,80,120,180]),
     "BullFlag": (det_flag, [15,20,30,40,50,60]),
     "FallingWedge": (det_fwedge, [30,50,80,120]),
@@ -1898,19 +1474,7 @@ DETECTORS = {
     "EpisodicPivot": (det_epivot, [30]),
     "PocketPivot": (det_ppivot, [30]),
     "Anticipation": (det_anticipation, [30,50]),
-    "Stage2Breakout": (det_stage2bo, [180,250,350,500]),
-    "ORB": (det_orb, [4, 6, 8]),
-    "VWAPReclaim": (det_vwap_reclaim, [10, 20, 30]),
-    # New patterns v4.3
-    "SaucerBottom":    (det_saucer_bottom, [120, 180, 250, 350]),
-    "PowerTrend":      (det_power_trend,   [210, 300, 500]),
-    "WeeklyVCP":       (det_weekly_vcp,    [26, 52, 104]),    # weekly bars
-    "WeeklyFlatBase":  (det_weekly_flat,   [8, 13, 20]),      # weekly bars
-    "MonthlyStage2":   (det_monthly_stage2,[24, 36, 60]),     # monthly bars
-    "EarningsBase":    (det_earnings_base, [30, 50, 80]),
-    "AscendingBase":   (det_ascending_base,[60, 100, 150]),
-    "RSNewHigh":       (det_rs_new_high,   [252, 500]),
-    "LowFloatMomentum":(det_low_float_momentum,[30, 50]),
+    "Stage2Breakout": (det_stage2bo, [180]),
 }
 
 # ================================================================
@@ -1918,16 +1482,13 @@ DETECTORS = {
 # ================================================================
 def scan_stock(sym, nifty_d, ftd_active, market_trend,
                period=PERIOD_DAILY, detector_filter=None, aggression=2):
-    fund = {}; fund_ok = False
-    cc, cr = "Unknown", None
+    fund = dl_fund(sym)
+    fund_ok = fund.get("_fund_ok", False)
+    cc, cr = cap_class(fund.get("marketCap"))
     rows = []; patterns_found = set()
-    prom_score = 0.5; earn_score = 0.5; low_float = False
-    has_deal = False; deal_val_cr = None; deal_type = None
 
-    df = read_cache(sym, "1d")
-    if df is None or len(df) == 0:
-        df = dl_cached(sym, period)
-    if df is None or len(df) < 30: return rows, True
+    df = dl_cached(sym, period)  # uses incremental cache
+    if df is None or len(df) < 30: return rows, fund_ok
 
     close = df["Close"].values.astype(float)
     vol   = df["Volume"].values.astype(float) if "Volume" in df.columns else None
@@ -1938,7 +1499,7 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
     # ── Global liquidity pre-filter (skip before any detector runs) ──────────
     if vol is not None and len(close) >= 20:
         avg_to = np.mean(vol[-20:]) * np.mean(close[-20:]) / 1e7
-        if avg_to < MIN_LIQUIDITY_CR: return rows, True   # illiquid — skip entirely
+        if avg_to < MIN_LIQUIDITY_CR: return rows, fund_ok   # illiquid — skip entirely
 
     # ── 52-week high proximity filter ────────────────────────────────────────
     dist_52wk = None
@@ -1955,42 +1516,16 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
     else:
         nc = nr = None
 
-    # v4.3: weekly + monthly data for extended pattern detection
-    df_wk = read_cache(sym, "1wk", limit=200)
-    df_mo = read_cache(sym, "1mo", limit=72)
-    close_wk = df_wk["Close"].values.astype(float) if df_wk is not None and len(df_wk) > 10 else None
-    vol_wk   = df_wk["Volume"].values.astype(float) if df_wk is not None and "Volume" in df_wk.columns else None
-    close_mo = df_mo["Close"].values.astype(float) if df_mo is not None and len(df_mo) > 10 else None
-    vol_mo   = df_mo["Volume"].values.astype(float) if df_mo is not None and "Volume" in df_mo.columns else None
-
     cs, completeness = canslim_score(close, vol, fund, nc, nr)
     stage = check_weinstein_stage(close)
     vdu = check_volume_dryup(vol)
-    earnings_near = False
+    earnings_near = check_earnings_near(fund)
     adr = calc_adr(close)
 
     dets = {k:v for k,v in DETECTORS.items()
             if detector_filter is None or k in detector_filter}
 
-    # Build data sources: daily + weekly + monthly
-    _tf_sources = [("Daily", close, vol, open_p, high_p, low_p)]
-    if close_wk is not None:
-        _tf_sources.append(("Weekly", close_wk, vol_wk, None, None, None))
-    if close_mo is not None:
-        _tf_sources.append(("Monthly", close_mo, vol_mo, None, None, None))
-
-    for _tf_label, _close, _vol, _open, _high, _low in _tf_sources:
-      # Only run weekly/monthly specific patterns on their respective TFs
-      _tf_pats = {
-          "Daily":   lambda p: p not in ("WeeklyVCP","WeeklyFlatBase","MonthlyStage2"),
-          "Weekly":  lambda p: p in ("WeeklyVCP","WeeklyFlatBase","CupHandle","VCP",
-                                      "FlatBase","InvHS","AscendingBase","RSNewHigh"),
-          "Monthly": lambda p: p in ("MonthlyStage2","SaucerBottom"),
-      }.get(_tf_label, lambda p: True)
-
-      for pat, (detector, windows) in dets.items():
-        if not _tf_pats(pat): continue
-        close = _close; vol = _vol  # rebind for this TF
+    for pat, (detector, windows) in dets.items():
         best = None
         for w in windows:
             if len(close) < w: continue
@@ -2022,58 +1557,27 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
         except Exception:
             rs_pct = None
         leg = identify_leg(close, best["bz"])
-        # Historical win rate from signal_outcomes
-        _wr = _get_pattern_winrate(con, best["pattern"]) if "con" in dir() else None
-
         notes = " | ".join(filter(None, [
-            
+            "EARNINGS SOON" if earnings_near else None,
             "VOL DRY-UP" if vdu else None,
             "STAGE2" if "Stage2" in stage else None,
             f"ADR={adr}%" if adr >= 3.5 else None,
-            f"WIN:{_wr}%" if _wr is not None else None,
-            
-            
-            
-            
         ]))
         rows.append(dict(
             scan_date=str(_today()), scan_time=_ist("%H:%M"),
-            scan_mode="daily", stock=sym.replace(".NS",""), name=None,
-            sector=None, cap_class=cc, cap_cr=cr,
-            pattern=best["pattern"], timeframe=_tf_label, status=best["status"],
+            scan_mode="daily", stock=sym.replace(".NS",""), name=fund.get("longName"),
+            sector=fund.get("sector"), cap_class=cc, cap_cr=cr,
+            pattern=best["pattern"], timeframe="Daily", status=best["status"],
             breakout_zone=best["bz"], cmp=best["last"], stop_loss=stop,
             target_1=t1, target_2=t2, target_3=t3, risk_reward=rr,
             quality=best["quality"], vol_surge=best.get("vs"),
             canslim_score=cs, data_completeness=completeness,
             rs_percentile=rs_pct, dist_52wk_pct=dist_52wk,
             converging=None, leg=leg,
-            earnings_near=0, ftd_active=1 if ftd_active else 0,
+            earnings_near=1 if earnings_near else 0, ftd_active=1 if ftd_active else 0,
             vol_dryup=1 if vdu else 0, stage=stage, recommendation=rec,
             m1=best.get("m1"), m2=best.get("m2"), m3=best.get("m3"),
-            m4=best.get("m4"), m5=best.get("m5"), notes=notes or None,
-            **calc_position_size(best["last"], stop or 0),
-            # v4.3 new columns
-            pattern_detail=json.dumps({
-                k: best.get(k) for k in
-                ["m1","m2","m3","m4","m5"] if best.get(k) is not None
-            }),
-            promoter_score=0.5,
-            earnings_score=0.5,
-            low_float=0,
-            insider_deal=0,
-            deal_value_cr=None,
-            deal_type=deal_type,
-            pe_ratio=None, pb_ratio=None, roe=None, roce=None,
-            revenue_growth_yoy=None, revenue_growth_3yr=None,
-            promoter_pct=None, pledging_pct=None, debt_equity=None,
-            free_float_pct=None, piotroski_score=None, eps_accelerating=0,
-            rsi_14=_calc_rsi14(close) if len(close) >= 15 else None,
-            atr_pct=round(calc_atr(close,14)/close[-1]*100,2) if len(close)>=15 else None,
-            above_200ma_wk=1 if (close_wk is not None and len(close_wk)>=200
-                                  and close_wk[-1] > np.mean(close_wk[-200:])) else 0,
-            weekly_trend=get_sector_trend(sym, "1wk") if _tf_label=="Daily" else None,
-            monthly_trend=get_sector_trend(sym, "1mo") if _tf_label=="Daily" else None,
-        ))
+            m4=best.get("m4"), m5=best.get("m5"), notes=notes or None))
 
     if len(patterns_found) > 1:
         conv = "+".join(sorted(patterns_found))
@@ -2207,12 +1711,12 @@ def halfhour_check(nifty_d):
     else:
         intraday_dets = INTRADAY_DETECTORS
     log.info(f"Quick-scan {QUICK_SIZE} stocks for same-day signals...")
-    stocks = list({w["stock"]+".NS" for w in watchlist} | set(NIFTY_500_FALLBACK_NS[:QUICK_SIZE]))
-    stocks = stocks[:QUICK_SIZE]
+    warm_cache(stocks, workers=MAX_WORKERS)  # incremental refresh for quick-scan stocks
+    stocks = load_universe()[:QUICK_SIZE]
     quick_rows = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        futs = {ex.submit(scan_stock_intraday, s, nifty_d, ftd_active,
-                          market_trend, aggression): s for s in stocks}
+        futs = {ex.submit(scan_stock, s, nifty_d, ftd_active, market_trend,
+                          PERIOD_QUICK, intraday_dets): s for s in stocks}
         for fut in as_completed(futs):
             try:
                 rows, _ = fut.result()
@@ -2330,7 +1834,7 @@ def healthcheck():
     df = dl("RELIANCE.NS", "1d", "1mo")
     print(f"OK ({len(df)} bars)" if df else "FAIL"); ok = ok and bool(df)
     print("[2] Fundamentals... ", end="")
-    f = {}  # dl_fund disabled
+    f = dl_fund("RELIANCE.NS")
     print(f"OK mcap={f.get('marketCap')}" if f.get("marketCap") else "WARN — no mcap")
     print("[3] Universe...     ", end="")
     u = load_universe()
@@ -2433,331 +1937,124 @@ def print_outcome_summary(con):
     except Exception as e:
         log.debug(f"Outcome summary: {e}")
 
-
-def scan_stock_intraday(sym: str, nifty_d, ftd_active: bool,
-                        market_trend: str, aggression: int = 2) -> tuple:
-    """
-    Multi-timeframe intraday scan: 15m + 30m + 45m + 75m + 1h.
-    Runs all detectors including ORB and VWAPReclaim.
-    """
-    fund = {}
-    fund_ok = False
-    cc, cr = "Unknown", None
-    rows = []; patterns_found = set()
-
-    # Read 15m base (data_updater stores this)
-    df_15m = read_cache(sym, "15m", limit=300)
-    if df_15m is None or len(df_15m) < 20:
-        return rows, fund_ok
-
-    # Liquidity guard
-    _v15 = df_15m["Volume"].values.astype(float) if "Volume" in df_15m.columns else None
-    _c15 = df_15m["Close"].values.astype(float)
-    if _v15 is not None and len(_c15) >= 10:
-        daily_to = np.mean(_v15[-25:]) * np.mean(_c15[-25:]) * 25 / 1e7
-        if daily_to < MIN_LIQUIDITY_CR: return rows, fund_ok
-    if len(_c15) >= 10 and np.mean(_c15[-10:]) > 0:
-        if np.std(_c15[-10:]) / np.mean(_c15[-10:]) < 0.001: return rows, fund_ok
-
-    # Build TF dict
-    tf_dfs = {"15m": df_15m}
-    for tf in RESAMPLE_TFS:
-        r = resample_tf(df_15m, tf)
-        if r is not None and len(r) >= 10:
-            tf_dfs[tf] = r
-    df_1h = read_cache(sym, "1h", limit=200)
-    if df_1h is not None and len(df_1h) >= 10:
-        tf_dfs["1h"] = df_1h
-
-    # CANSLIM from daily data
-    df_d = read_cache(sym, "1d", limit=300)
-    if df_d is None or len(df_d) == 0:
-        df_d = dl_cached(sym)
-    nc = nr = None
-    cs = 0; completeness = 0; stage = "Unknown"; adr = 0; dist_52wk = None; rs_pct = None
-    if df_d is not None and len(df_d) >= 30:
-        close_d = df_d["Close"].values.astype(float)
-        vol_d   = df_d["Volume"].values.astype(float) if "Volume" in df_d.columns else None
-        if nifty_d is not None:
-            nc = nifty_d.reindex(df_d.index, method="ffill")["Close"].values
-            nr = np.full(len(nc), np.nan)
-            for i in range(min(252,len(nc)), len(nc)):
-                if nc[i-min(252,len(nc))] > 0:
-                    nr[i] = nc[i]/nc[i-min(252,len(nc))]-1
-        cs, completeness = canslim_score(close_d, vol_d, fund, nc, nr)
-        stage   = check_weinstein_stage(close_d)
-        adr     = calc_adr(close_d)
-        if len(close_d) >= 50:
-            hi52 = np.max(close_d[-min(252,len(close_d)):])
-            dist_52wk = round((hi52-close_d[-1])/hi52*100,1) if hi52>0 else None
-        try: rs_pct = calc_rs_percentile(close_d, nc, lb=63)
-        except Exception: pass
-
-    # VWAP from 15m
-    vwap, vs_vwap = get_vwap_today(sym)
-    rvol_td       = get_today_rvol(sym)
-    _gaps         = {g["stock"] for g in get_gap_signals_today()}
-    is_gap        = sym.replace(".NS","") in _gaps
-    vdu           = check_volume_dryup(df_d["Volume"].values.astype(float) if df_d is not None and "Volume" in df_d.columns else None)
-    earnings_near = False
-    mkt_up        = ftd_active or "Bull" in str(market_trend) or "Uptrend" in str(market_trend)
-
-    for tf_name, df in tf_dfs.items():
-        close  = df["Close"].values.astype(float)
-        vol    = df["Volume"].values.astype(float) if "Volume" in df.columns else None
-        open_p = df["Open"].values.astype(float)   if "Open"   in df.columns else None
-        high_p = df["High"].values.astype(float)   if "High"   in df.columns else None
-        low_p  = df["Low"].values.astype(float)    if "Low"    in df.columns else None
-
-        for pat, (detector, windows) in DETECTORS.items():
-            best = None
-            for w in windows:
-                if len(close) < w: continue
-                seg_c = close[-w:]; seg_v = vol[-w:] if vol is not None else None
-                try:
-                    if pat == "EpisodicPivot":
-                        res = detector(seg_c, seg_v,
-                                       o=open_p[-w:] if open_p is not None else None,
-                                       hi=high_p[-w:] if high_p is not None else None,
-                                       lo=low_p[-w:]  if low_p  is not None else None)
-                    elif pat == "VWAPReclaim":
-                        res = detector(seg_c, seg_v, vwap=vwap)
-                    else:
-                        res = detector(seg_c, seg_v)
-                except Exception: continue
-                if res is None: continue
-                if best is None or res["quality"] > best["quality"]:
-                    best = {**res, "_w": w}
-            if best is None: continue
-
-            rec = recommend(best["status"], cs, mkt_up, aggression=aggression, rs_pct=rs_pct)
-            if rec == "AVOID": continue
-            patterns_found.add(pat)
-            stop, t1, t2, t3, rr = calc_targets(best["pattern"], best["bz"],
-                                                  best.get("bottom"), best["last"], adr, close=close)
-            leg = identify_leg(close, best["bz"])
-            pos = calc_position_size(best["last"], stop or 0)
-            notes = " | ".join(filter(None,[
-                
-                f"RVOL {rvol_td}x" if rvol_td and rvol_td>=2 else None,
-                f"{'↑' if vs_vwap and vs_vwap>0 else '↓'}VWAP {abs(vs_vwap):.1f}%" if vs_vwap else None,
-                "GAP-UP" if is_gap else None, "VOL DRY-UP" if vdu else None,
-            ]))
-            rows.append(dict(
-                scan_date=str(_today()), scan_time=_ist("%H:%M"), scan_mode="halfhour",
-                stock=sym.replace(".NS",""), name=None, sector=None,
-                cap_class=cc, cap_cr=cr, pattern=best["pattern"], timeframe=tf_name,
-                status=best["status"], breakout_zone=best["bz"], cmp=best["last"], stop_loss=stop,
-                target_1=t1, target_2=t2, target_3=t3, risk_reward=rr,
-                quality=best["quality"], vol_surge=best.get("vs"),
-                rs_percentile=rs_pct, dist_52wk_pct=dist_52wk,
-                pos_shares=pos["shares"], pos_value=pos["value"],
-                canslim_score=cs, data_completeness=completeness, converging=None, leg=leg,
-                earnings_near=0, ftd_active=1 if ftd_active else 0,
-                vol_dryup=1 if vdu else 0, stage=stage, recommendation=rec,
-                m1=best.get("m1"), m2=best.get("m2"), m3=best.get("m3"),
-                m4=best.get("m4"), m5=best.get("m5"), notes=notes or None,
-            ))
-    if len(patterns_found) > 1:
-        conv = "+".join(sorted(patterns_found))
-        for r in rows: r["converging"] = conv
-    return rows, fund_ok
-
-
-
-def _is_market_hours():
-    """True 09:00–15:31 IST weekdays only."""
-    n = _now()
-    if n.weekday() >= 5: return False
-    t = n.hour * 60 + n.minute
-    return 9*60 <= t <= 15*60+31
-
-def _tg_ok():
-    return bool(TG_TOKEN and TG_CHAT)
-
-def _save_csv(df_or_list, prefix, label=""):
-    """Always save CSV. Print path prominently. Return path."""
-    _hm = _ist("%H%M")
-    path = os.path.join(OUTPUT_DIR, f"{prefix}_{_today()}_{_hm}.csv")
-    if isinstance(df_or_list, list):
-        pd.DataFrame(df_or_list).to_csv(path, index=False)
-    elif df_or_list is None or (hasattr(df_or_list,'__len__') and len(df_or_list)==0):
-        pd.DataFrame([{"status":"no_data","time":_ist(),"note":label}]).to_csv(path, index=False)
-    else:
-        df_or_list.to_csv(path, index=False)
-    sz = os.path.getsize(path)
-    log.info(f"{'='*55}")
-    log.info(f"CSV SAVED => {path}  ({sz:,} bytes{(', '+label) if label else ''})")
-    log.info(f"{'='*55}")
-    return path
-
-def _send_tg(msg, csv_path=None, caption=""):
-    """Send TG text + optional CSV. No-op if not configured."""
-    if not _tg_ok(): return
-    send_telegram(msg)
-    if csv_path and os.path.exists(csv_path):
-        send_telegram_file(csv_path, caption)
-
 def main():
-    ap = argparse.ArgumentParser(description="NSE Scanner v5.0-final")
+    ap = argparse.ArgumentParser(description="NSE Scanner v3.3")
     mode = ap.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--daily",      action="store_true")
-    mode.add_argument("--weekly",     action="store_true")
-    mode.add_argument("--halfhour",   action="store_true")
-    mode.add_argument("--dashboard",  action="store_true")
-    mode.add_argument("--healthcheck",action="store_true")
-    mode.add_argument("--test",       action="store_true")
-    ap.add_argument("--telegram",     action="store_true")
-    ap.add_argument("--force",        action="store_true", help="Bypass market-hours guard")
+    mode.add_argument("--daily", action="store_true", help="Full scan (8AM, 12:30PM, 4:30PM)")
+    mode.add_argument("--halfhour", action="store_true", help="30-min watchlist+quick scan")
+    mode.add_argument("--dashboard", action="store_true", help="Flask web UI")
+    mode.add_argument("--healthcheck", action="store_true")
+    mode.add_argument("--test", action="store_true", help="10 stocks test")
+    ap.add_argument("--telegram", action="store_true")
     args = ap.parse_args()
 
     if args.healthcheck: sys.exit(0 if healthcheck() else 1)
     if args.dashboard: run_dashboard(); return
 
-    # ── Market hours guard — halfhour ONLY runs 09:00-15:31 IST ─────────────
-    if args.halfhour and not args.force:
-        if not _is_market_hours():
-            log.info(f"HALFHOUR SKIPPED: outside 09:00-15:31 IST ({_ist()}). --force to override.")
-            csv_p = _save_csv(None, "halfhour", f"skipped_outside_market_hours_{_ist()}")
-            if _tg_ok() or args.telegram:
-                _send_tg(f"<b>30-min {_ist()}</b>\n⏸ Skipped — outside market hours\nUse --force to run manually.",
-                         csv_p, f"30-min {_ist()} | skipped")
-            sys.exit(0)
-
-    # ── Fetch Nifty ──────────────────────────────────────────────────────────
+    # Fetch Nifty — with cache fallback when yfinance crashes (ValueError on date parsing)
     nifty_d = None
     for sym in ["^NSEI", "NIFTY_IND_NS"]:
-        nifty_d = dl_cached(sym)
-        if nifty_d is not None and len(nifty_d) > 50: break
-        # dl_cached fallback may fail (yfinance ValueError on indices) — try cache directly
-        cached = read_cache(sym.replace("^",""), "1d") or _cache_read(sym)
+        try:
+            nifty_d = dl_cached(sym)  # incremental Nifty cache
+        except Exception:
+            pass
+        if nifty_d is not None and len(nifty_d) > 50:
+            break
+        # Direct cache read fallback (works even when yfinance download fails)
+        cached = _cache_read(sym)
         if cached is not None and len(cached) > 50:
-            nifty_d = cached; break
+            nifty_d = cached
+            break
     if nifty_d is None:
-        log.warning("Nifty fetch failed — using aggression=1 (cautious) as fallback")
+        log.warning("Nifty fetch failed — using cautious defaults (aggression=1)")
 
-    ftd_active = False; market_trend = "Unknown"; aggression = 1   # safe default: cautious not bear
-    india_vix = None
-    breadth = {"pct_above_50": 50, "pct_above_200": 50, "regime": "Unknown"}
-    regime_info = {"regime": "Unknown", "aggression": 1, "detail": "no data"}
+    # ── Market context — computed once, shared by ALL modes ──────────────────
+    ftd_active   = False
+    market_trend = "Unknown"
+    aggression   = 1          # safe default when nifty unavailable (was 2 — too optimistic)
+    india_vix    = None
+    breadth      = {"pct_above_50": 50, "pct_above_200": 50, "regime": "Unknown"}
+    regime_info  = {"regime": "Unknown", "aggression": 1, "detail": "no data"}
     if nifty_d is not None:
         ftd_active, ftd_note = check_follow_through_day(nifty_d)
         market_trend = check_market_trend(nifty_d["Close"].values)
         india_vix    = fetch_india_vix()
+        # breadth uses cached stocks — only available after warm-up, use light version here
         try:
-            breadth = check_market_breadth(NIFTY_500_FALLBACK_NS[:80])
-        except Exception: pass
+            fallback_sample = NIFTY_500_FALLBACK_NS[:80]
+            breadth = check_market_breadth(fallback_sample)
+        except Exception:
+            pass
         regime_info = get_market_regime(nifty_d, india_vix, breadth)
-        aggression  = max(1, regime_info["aggression"])   # floor at 1: always show WATCH signals
+        aggression  = max(1, regime_info["aggression"])   # floor=1: always emit WATCH in bear mkt
         log.info(f"Market: {market_trend} | FTD: {ftd_active} | "
                  f"Regime: {regime_info['regime']} (agg={aggression}) | VIX: {india_vix}")
 
-    # ==============================================================
-    # WEEKLY MODE
-    # ==============================================================
-    if args.weekly:
-        t0 = time.time()
-        log.info(f"=== WEEKLY {_today()} {_ist('%H:%M')} ===")
-        stocks = load_universe()
-        log.info(f"Weekly scan: {len(stocks)} stocks")
-        all_rows = []; ok_count = 0
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-            futs = {ex.submit(scan_stock, s, nifty_d, ftd_active, market_trend,
-                              "5y", {"WeeklyVCP","WeeklyFlatBase","MonthlyStage2",
-                                     "SaucerBottom","CupHandle","VCP","RSNewHigh",
-                                     "AscendingBase","PowerTrend"},
-                              aggression): s for s in stocks}
-            for fut in as_completed(futs):
-                ok_count += 1
-                try:
-                    rows, _ = fut.result()
-                    if rows: all_rows.extend(rows)
-                except Exception: pass
-        elapsed_w = time.time() - t0
-        if all_rows:
-            wdf = (pd.DataFrame(all_rows)
-                   .drop_duplicates(subset=["stock","pattern","timeframe"])
-                   .sort_values("quality", ascending=False)
-                   .reset_index(drop=True))
-        else:
-            log.warning("Weekly: 0 signals"); wdf = pd.DataFrame()
-        log.info(f"Weekly: {len(wdf)} signals | {elapsed_w:.0f}s")
-        csv_p = _save_csv(wdf, "weekly", f"{len(wdf)} signals")
-        if _tg_ok() or args.telegram:
-            _wbuys = wdf[wdf["recommendation"].str.startswith("BUY", na=False)] if len(wdf) else wdf
-            if len(wdf) == 0:
-                msg = f"<b>\U0001f4c5 Weekend Watchlist — {_today()}</b>\n\u26a0\ufe0f 0 signals. Check logs."
-            else:
-                msg = (f"<b>\U0001f4c5 Weekend Watchlist — {_today()}</b>\n"
-                       f"Weekly+Monthly | {len(wdf)} signals | {len(_wbuys)} BUY\n\n")
-                for _, r in _wbuys.head(10).iterrows():
-                    msg += (f"\U0001f7e2 <b>{r['stock']}</b> ({r.get('cap_class','?')}) "
-                            f"\u2014 {r['pattern']} [{r.get('timeframe','?')}]\n"
-                            f"   CMP \u20b9{r['cmp']} | BZ \u20b9{r.get('breakout_zone','?')}"
-                            f" | SL \u20b9{r.get('stop_loss','?')}\n"
-                            f"   Promoter {r.get('promoter_pct','?')}% | Pledge {r.get('pledging_pct','?')}%\n")
-            _send_tg(msg, csv_p, f"Weekend Watchlist {_today()} | {len(wdf)} signals | {elapsed_w:.0f}s")
-        return
-
-    # ==============================================================
-    # HALFHOUR MODE
-    # ==============================================================
+    # ---- 30-MINUTE MODE ----
     if args.halfhour:
         t0 = time.time()
-        log.info(f"=== 30-min {_ist()} ===")
+        log.info(f"=== 30-min scan {_ist()} ===")
         alerts, quick_df = halfhour_check(nifty_d)
-        elapsed_hh = time.time() - t0
-        log.info(f"{len(alerts)} alerts | {elapsed_hh:.0f}s")
-
-        # ALWAYS build df even if empty
-        if quick_df is None:
-            quick_df = pd.DataFrame(alerts) if alerts else pd.DataFrame()
-
-        # ALWAYS save CSV
-        n_active = sum(1 for a in alerts if a.get("status") in
-                       ("BREAKOUT TRIGGERED","Burst Active","ORB Breakout","VWAP Reclaim"))
-        mkt_str = market_trend if nifty_d is not None else "?"
-        csv_path = _save_csv(quick_df, "halfhour",
-                             f"signals:{len(quick_df)} active:{n_active} mkt:{mkt_str}")
-
-        # TG: auto if env set OR --telegram passed
-        if _tg_ok() or args.telegram:
+        log.info(f"{len(alerts)} alerts | {time.time()-t0:.0f}s")
+        if args.telegram:
+            # ── Text alert: only new (non-deduped) signals ────────────────────
             if alerts:
                 msg = fmt_halfhour(alerts[:20])
                 if msg: send_telegram(msg)
             else:
-                send_telegram(f"<b>30-min {_ist()}</b>\nNo new signals | {mkt_str} | {elapsed_hh:.0f}s")
-            cap = f"30-min {_ist()} | {len(quick_df)} signals | {n_active} active | {mkt_str} | {elapsed_hh:.0f}s"
-            send_telegram_file(csv_path, cap)
+                log.info("No new alerts this round (all deduped or no signals)")
+
+            # ── CSV: always send when quick_df has data (regardless of dedup) ─
+            # quick_df = full scan results; alerts = subset not yet sent today
+            if quick_df is None and alerts:
+                quick_df = pd.DataFrame(alerts)  # fallback: use alert dicts
+            if quick_df is not None and len(quick_df):
+                _hh_time = _ist("%H%M")
+                csv_path = os.path.join(OUTPUT_DIR,
+                    f"halfhour_{_today()}_{_hh_time}.csv")
+                quick_df.to_csv(csv_path, index=False)
+                n_active = sum(1 for a in alerts
+                               if a.get("status") in ("BREAKOUT TRIGGERED","Burst Active"))
+                mkt_str = market_trend if nifty_d is not None else "?"
+                cap = (f"30-min {_ist()} | {len(quick_df)} signals | "
+                       f"{n_active} new alerts | Market: {mkt_str}")
+                send_telegram_file(csv_path, cap)
+                log.info(f"CSV sent: {csv_path}")
+            else:
+                log.info("No signals in quick_df — CSV skipped")
+        elif not alerts:
+            log.info("No new signals this round")
         return
 
-    # ==============================================================
-    # DAILY / TEST MODE
-    # ==============================================================
+    # ---- DAILY / TEST MODE ----
     con = get_db()
     t0 = time.time()
     scan_label = "TEST" if args.test else "DAILY"
-    log.info(f"=== {scan_label} {_today()} {_ist('%H:%M')} ===")
-    prefix = "test" if args.test else "scan"
+    _scan_time = _ist("%H:%M"); log.info(f"=== {scan_label} {_today()} {_scan_time} ===")
 
     stocks = load_universe()
     if args.test:
-        # 25 diverse stocks — mix of large + growth + momentum, much more likely to trigger
-        stocks = [
-            "RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS","ICICIBANK.NS",
-            "TATAMOTORS.NS","BAJFINANCE.NS","SBIN.NS","LT.NS","ADANIENT.NS",
-            "ZOMATO.NS","DIXON.NS","POLYCAB.NS","ASTRAL.NS","DEEPAKNTR.NS",
-            "KPITTECH.NS","TATAELXSI.NS","IRCTC.NS","TITAN.NS","PAGEIND.NS",
-            "HAL.NS","BEL.NS","HFCL.NS","SUZLON.NS","IRFC.NS",
-        ]
+        stocks = ["RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS","ADANIENT.NS",
+                  "TATAMOTORS.NS","BAJFINANCE.NS","ICICIBANK.NS","SBIN.NS","LT.NS"]
 
     log.info(f"{len(stocks)} stocks to scan")
+
+    # ── Warm-up price cache (incremental — only downloads what's new) ──────
+    # On first ever run: downloads 1y for all stocks (~15-20 min)
+    # On subsequent runs: only downloads last 7d (~3-4 min total)
     warm_cache(stocks, workers=MAX_WORKERS)
 
+    ftd_active = False; market_trend = "Unknown"
+    if nifty_d is not None:
+        ftd_active, ftd_note = check_follow_through_day(nifty_d)
+        market_trend = check_market_trend(nifty_d["Close"].values)
+        log.info(f"Market: {market_trend} | FTD: {ftd_active} ({ftd_note})")
+
     all_rows = []; ok_count = 0; fund_fails = 0
+
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futs = {ex.submit(scan_stock, s, nifty_d, ftd_active, market_trend,
-                          aggression=aggression): s for s in stocks}
+                                   aggression=aggression): s for s in stocks}
         for i, fut in enumerate(as_completed(futs)):
             if (i+1) % 200 == 0:
                 log.info(f"  {i+1}/{len(stocks)} | signals: {len(all_rows)}")
@@ -2766,30 +2063,16 @@ def main():
                 ok_count += 1
                 if not fund_ok: fund_fails += 1
                 if rows: all_rows.extend(rows)
-            except Exception as _scan_ex:
-                if ok_count == 0 and i < 5:   # log first few crashes to diagnose
-                    log.error(f"scan_stock({futs.get(fut,'?')}) CRASH: {type(_scan_ex).__name__}: {_scan_ex}")
+            except Exception as _ex:
+                if i < 3:   # log first 3 crashes so we can diagnose
+                    log.error(f"scan_stock crash #{i+1}: {type(_ex).__name__}: {_ex}")
 
     elapsed = time.time() - t0
     log.info(f"Done: {elapsed/60:.1f}m | {ok_count}/{len(stocks)} OK | "
              f"fund_miss={fund_fails} | {len(all_rows)} signals")
 
-    # ── ALWAYS save CSV — even on 0 signals ──────────────────────────────────
     if not all_rows:
-        log.warning("0 signals — saving status CSV")
-        empty_df = pd.DataFrame([{
-            "scan_date": str(_today()), "scan_time": _ist("%H:%M"),
-            "scan_mode": scan_label, "stock": "NO_SIGNALS", "pattern": "—",
-            "recommendation": "—",
-            "notes": f"0 signals | {ok_count}/{len(stocks)} stocks | {elapsed/60:.1f}m | {market_trend}",
-        }])
-        csv_path = _save_csv(empty_df, prefix, f"0 signals | {ok_count}/{len(stocks)} scanned")
-        if _tg_ok() or args.telegram:
-            _send_tg(
-                f"<b>NSE {scan_label} {_ist()}</b>\n\u26a0\ufe0f 0 signals\n"
-                f"{ok_count}/{len(stocks)} scanned | {elapsed/60:.1f}m | {market_trend}",
-                csv_path, f"NSE {scan_label} {_today()} — 0 signals")
-        con.close(); return
+        log.info("No signals."); con.close(); return
 
     raw = (pd.DataFrame(all_rows)
            .drop_duplicates(subset=["stock","pattern","timeframe"])
@@ -2800,72 +2083,69 @@ def main():
         q   = (r.get("quality") or 0) * 100
         vs  = min(r.get("vol_surge") or 1, 5) / 5
         rr  = min(r.get("risk_reward") or 0, 5) / 5
-        rw  = {"BUY \u2014 strong":3,"BUY \u2014 moderate":2,
-               "WATCH \u2014 await breakout":1.5,"WATCH \u2014 mixed":1}.get(r.get("recommendation",""),0)
-        rs  = min(r.get("rs_percentile") or 50, 100) / 100
-        ti  = 0.3 if (r.get("m3") or 0) >= 1.05 else 0
-        nb  = 0.2 if (r.get("m4") or 0) >= 1.0  else 0
-        cb  = 0.5 if r.get("converging") else 0
+        rw  = {"BUY — strong":3,"BUY — moderate":2,
+               "WATCH — await breakout":1.5,"WATCH — mixed":1}.get(r.get("recommendation",""),0)
+        ti  = 0.3 if (r.get("m3") or 0) >= 1.05 else 0   # TI65 bonus
+        nb  = 0.2 if (r.get("m4") or 0) >= 1.0 else 0    # narrow-day bonus
+        cb  = 0.5 if r.get("converging") else 0            # convergence bonus
         s2  = 0.3 if "Stage2" in str(r.get("stage","")) else 0
         vd  = 0.2 if r.get("vol_dryup") else 0
-        ps  = (r.get("promoter_score") or 0.5) * 0.25
-        es  = (r.get("earnings_score") or 0.5) * 0.15
-        lf  = 0.2 if r.get("low_float") else 0
-        ins = 0.4 if r.get("insider_deal") else 0
-        ea  = 0.2 if r.get("eps_accelerating") else 0
-        pp  = -min((r.get("pledging_pct") or 0) / 30, 1) * 0.5
-        wr_n = r.get("notes") or ""
-        wr_b = 0.2 if any(f"WIN:{x}" in wr_n for x in ["7","8","9"]) else 0
-        return (cs*0.18 + q*0.15 + rw*0.15 + rs*0.08 + vs*0.07 + rr*0.05
-                + ps + es + lf + ins + ea + ti+nb+cb+s2+vd + pp + wr_b)
+        return cs*0.30 + q*0.20 + rw*0.25 + vs*0.10 + rr*0.05 + ti+nb+cb+s2+vd
 
     raw["_score"] = raw.apply(_score, axis=1)
     df = raw.sort_values("_score", ascending=False).drop(columns=["_score"]).reset_index(drop=True)
-    buys   = df[df["recommendation"].str.startswith("BUY",   na=False)]
-    watches= df[df["recommendation"].str.startswith("WATCH", na=False)]
 
-    # ── DB (skip for test) ────────────────────────────────────────────────────
-    if not args.test:
-        db_execmany(con, """INSERT INTO signals
-            (scan_date,scan_time,scan_mode,stock,name,sector,cap_class,cap_cr,
-             pattern,timeframe,status,breakout_zone,cmp,stop_loss,
-             target_1,target_2,target_3,risk_reward,quality,vol_surge,
-             canslim_score,data_completeness,rs_percentile,dist_52wk_pct,pos_shares,pos_value,converging,leg,
-             earnings_near,ftd_active,vol_dryup,stage,recommendation,m1,m2,m3,m4,m5,notes)
-            VALUES (:scan_date,:scan_time,:scan_mode,:stock,:name,:sector,:cap_class,:cap_cr,
-             :pattern,:timeframe,:status,:breakout_zone,:cmp,:stop_loss,
-             :target_1,:target_2,:target_3,:risk_reward,:quality,:vol_surge,
-             :canslim_score,:data_completeness,:rs_percentile,:dist_52wk_pct,:pos_shares,:pos_value,:converging,:leg,
-             :earnings_near,:ftd_active,:vol_dryup,:stage,:recommendation,:m1,:m2,:m3,:m4,:m5,:notes)""",
-                    df.to_dict("records"))
-        db_exec(con, """INSERT INTO runs
-            (scan_date,scan_time,mode,stocks_total,stocks_ok,signals,buys,elapsed_sec)
-            VALUES (?,?,?,?,?,?,?,?)""",
-                (str(_today()), _ist("%H:%M"), scan_label,
-                 len(stocks), ok_count, len(df), len(buys), round(elapsed,1)))
+    # Save to DB
+    db_execmany(con, """INSERT INTO signals
+        (scan_date,scan_time,scan_mode,stock,name,sector,cap_class,cap_cr,
+         pattern,timeframe,status,breakout_zone,cmp,stop_loss,
+         target_1,target_2,target_3,risk_reward,quality,vol_surge,
+         canslim_score,data_completeness,rs_percentile,dist_52wk_pct,converging,leg,
+         earnings_near,ftd_active,vol_dryup,stage,recommendation,m1,m2,m3,m4,m5,notes)
+        VALUES (:scan_date,:scan_time,:scan_mode,:stock,:name,:sector,:cap_class,:cap_cr,
+         :pattern,:timeframe,:status,:breakout_zone,:cmp,:stop_loss,
+         :target_1,:target_2,:target_3,:risk_reward,:quality,:vol_surge,
+         :canslim_score,:data_completeness,:rs_percentile,:dist_52wk_pct,:converging,:leg,
+         :earnings_near,:ftd_active,:vol_dryup,:stage,:recommendation,:m1,:m2,:m3,:m4,:m5,:notes)""",
+                df.to_dict("records"))
 
-    # ── Watchlist ─────────────────────────────────────────────────────────────
-    wl_items = [{"stock": r["stock"], "name": r.get("name"), "sector": r.get("sector"),
-                 "cap_class": r.get("cap_class"), "pattern": r["pattern"],
-                 "breakout_zone": r.get("breakout_zone"), "stop_loss": r.get("stop_loss"),
-                 "status": r.get("status"), "added_date": str(_today())}
-                for _, r in df.iterrows()]
+    # Update watchlist JSON (persisted via git commit in workflow)
+    wl_items = []
+    for _, r in df.iterrows():
+        wl_items.append({
+            "stock": r["stock"], "name": r.get("name"), "sector": r.get("sector"),
+            "cap_class": r.get("cap_class"), "pattern": r["pattern"],
+            "breakout_zone": r.get("breakout_zone"), "stop_loss": r.get("stop_loss"),
+            "status": r.get("status"), "added_date": str(_today()),
+        })
+    # Merge with existing (keep entries from last 30 days, dedup by stock+pattern)
     existing_wl = {f"{w['stock']}_{w['pattern']}": w for w in load_watchlist()}
-    for item in wl_items: existing_wl[f"{item['stock']}_{item['pattern']}"] = item
+    for item in wl_items:
+        existing_wl[f"{item['stock']}_{item['pattern']}"] = item
     save_watchlist(list(existing_wl.values()))
 
-    # ── ALWAYS save CSV ───────────────────────────────────────────────────────
-    csv_path = _save_csv(df, prefix,
-        f"BUY:{len(buys)} WATCH:{len(watches)} TOTAL:{len(df)} | {market_trend} | {elapsed/60:.1f}m")
+    buys = df[df["recommendation"].str.startswith("BUY", na=False)]
+    watches = df[df["recommendation"].str.startswith("WATCH", na=False)]
+    db_exec(con, """INSERT INTO runs
+        (scan_date,scan_time,mode,stocks_total,stocks_ok,signals,buys,elapsed_sec)
+        VALUES (?,?,?,?,?,?,?,?)""",
+            (str(_today()), _ist("%H:%M"), scan_label,
+             len(stocks), ok_count, len(df), len(buys), round(elapsed,1)))
 
-    # ── Console ───────────────────────────────────────────────────────────────
-    log.info(f"BUY: {len(buys)} | WATCH: {len(watches)} | Total: {len(df)}")
+    # Save CSV
+    _csv_hm = _ist("%H%M"); csv_path = os.path.join(OUTPUT_DIR, f"scan_{_today()}_{_csv_hm}.csv")
+    df.to_csv(csv_path, index=False)
+    log.info(f"CSV saved → {csv_path}")
+
+    log.info(f"\nBUY: {len(buys)} | WATCH: {len(watches)}")
     log.info(f"\n{df['pattern'].value_counts().to_string()}")
+
     conv = df[df["converging"].notna()]
     if len(conv):
-        log.info("Convergence: " + " | ".join(
-            f"{s}:{conv[conv['stock']==s]['converging'].iloc[0]}"
-            for s in conv["stock"].unique()[:10]))
+        log.info("Convergence:")
+        for s in conv["stock"].unique():
+            log.info(f"  {s}: {conv[conv['stock']==s]['converging'].iloc[0]}")
+
     if len(buys):
         print("\n--- TOP BUYS ---")
         cols = ["stock","cap_class","pattern","status","cmp","breakout_zone","stop_loss",
@@ -2873,12 +2153,14 @@ def main():
                 "recommendation","notes"]
         print(buys[[c for c in cols if c in buys.columns]].head(20).to_string(index=False))
 
-    # ── TG: auto if env set OR --telegram passed ──────────────────────────────
-    if _tg_ok() or args.telegram:
+    if args.telegram:
+        # Send text alert
         send_telegram(fmt_daily(df, market_trend, ftd_active))
-        caption = (f"NSE {scan_label} {_today()} {_ist('%H:%M')} | "
-                   f"BUY:{len(buys)} WATCH:{len(watches)} Total:{len(df)} | "
-                   f"{market_trend} | {elapsed/60:.1f}m")
+        # Send full CSV as file
+        _cap_time = _ist("%H:%M")
+        caption = (f"NSE Scanner {_today()} {_cap_time} | "
+                   f"BUY: {len(buys)} | WATCH: {len(watches)} | "
+                   f"Total: {len(df)} signals | Market: {market_trend}")
         send_telegram_file(csv_path, caption)
 
     con.close()
