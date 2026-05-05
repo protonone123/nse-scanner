@@ -71,10 +71,10 @@
     "sector": "Industrials",
     "cap_class": "Large",
     "pattern": "MomBurst",
-    "breakout_zone": 344.8,
-    "stop_loss": 331.01,
-    "status": "Burst (low vol)",
-    "added_date": "2026-04-29"
+    "breakout_zone": 377.05,
+    "stop_loss": 367.35,
+    "status": "Burst Active",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "AUBANK",
@@ -798,9 +798,9 @@
     "cap_class": "Mid",
     "pattern": "DoubleBottom",
     "breakout_zone": 92.61,
-    "stop_loss": 106.23,
+    "stop_loss": 110.25,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "BHAGYANGR",
@@ -1389,12 +1389,12 @@
     "stock": "EBGNG",
     "name": "GNG ELECTRONICS LIMITED",
     "sector": "Technology",
-    "cap_class": "Small",
+    "cap_class": "Mid",
     "pattern": "MomBurst",
-    "breakout_zone": 415.0,
-    "stop_loss": 398.4,
-    "status": "Burst (low vol)",
-    "added_date": "2026-04-29"
+    "breakout_zone": 453.25,
+    "stop_loss": 437.55,
+    "status": "Burst Active",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "KRISHNADEF",
@@ -1578,10 +1578,10 @@
     "sector": "Industrials",
     "cap_class": "Small",
     "pattern": "MomBurst",
-    "breakout_zone": 361.96,
-    "stop_loss": 347.48,
-    "status": "Burst (low vol)",
-    "added_date": "2026-04-29"
+    "breakout_zone": 378.65,
+    "stop_loss": 363.5,
+    "status": "Burst Active",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "PICCADIL",
@@ -2008,9 +2008,9 @@
     "cap_class": "Mid",
     "pattern": "InvHS",
     "breakout_zone": 75.83,
-    "stop_loss": 106.23,
+    "stop_loss": 110.25,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ARIS",
@@ -2038,12 +2038,12 @@
     "stock": "EBGNG",
     "name": "GNG ELECTRONICS LIMITED",
     "sector": "Technology",
-    "cap_class": "Small",
+    "cap_class": "Mid",
     "pattern": "InvHS",
     "breakout_zone": 328.25,
-    "stop_loss": 404.06,
-    "status": "Forming",
-    "added_date": "2026-05-02"
+    "stop_loss": 433.62,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "FEDFINA",
@@ -2084,10 +2084,10 @@
     "sector": "Basic Materials",
     "cap_class": "Mid",
     "pattern": "BullFlag",
-    "breakout_zone": 110.79,
-    "stop_loss": 107.61,
+    "breakout_zone": 115.24,
+    "stop_loss": 110.25,
     "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "NESTLEIND",
@@ -2634,10 +2634,10 @@
     "sector": "Industrials",
     "cap_class": "Large",
     "pattern": "BullFlag",
-    "breakout_zone": 354.71,
-    "stop_loss": 342.12,
-    "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "breakout_zone": 377.05,
+    "stop_loss": 364.92,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ACUTAAS",
@@ -2711,10 +2711,10 @@
     "sector": "Financial Services",
     "cap_class": "Large",
     "pattern": "BullFlag",
-    "breakout_zone": 219.85,
-    "stop_loss": 209.2,
+    "breakout_zone": 220.05,
+    "stop_loss": 212.47,
     "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ANGELONE",
@@ -2734,9 +2734,9 @@
     "cap_class": "Large",
     "pattern": "DoubleBottom",
     "breakout_zone": 421.6,
-    "stop_loss": 354.17,
+    "stop_loss": 355.33,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "STAR",
@@ -2767,9 +2767,9 @@
     "cap_class": "Large",
     "pattern": "DoubleBottom",
     "breakout_zone": 303.55,
-    "stop_loss": 342.12,
-    "status": "Forming",
-    "added_date": "2026-05-02"
+    "stop_loss": 364.92,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "NRBBEARING",
@@ -2789,9 +2789,9 @@
     "cap_class": "Large",
     "pattern": "DoubleBottom",
     "breakout_zone": 976.1,
-    "stop_loss": 1043.3,
+    "stop_loss": 1056.48,
     "status": "Breakout Ready",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "NRBBEARING",
@@ -2811,9 +2811,9 @@
     "cap_class": "Large",
     "pattern": "DoubleBottom",
     "breakout_zone": 3171.2,
-    "stop_loss": 4362.8,
+    "stop_loss": 4397.69,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ACUTAAS",
@@ -2910,9 +2910,9 @@
     "cap_class": "Large",
     "pattern": "DoubleBottom",
     "breakout_zone": 179.66,
-    "stop_loss": 207.2,
+    "stop_loss": 212.47,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SOLARINDS",
@@ -3063,10 +3063,10 @@
     "sector": "Industrials",
     "cap_class": "Large",
     "pattern": "BullFlag",
-    "breakout_zone": 4520.8,
-    "stop_loss": 4376.88,
+    "breakout_zone": 4486.6,
+    "stop_loss": 4397.69,
     "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "THERMAX",
@@ -3152,9 +3152,9 @@
     "cap_class": "Large",
     "pattern": "FlatBase",
     "breakout_zone": 186.16,
-    "stop_loss": 181.68,
+    "stop_loss": 183.33,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SAIL",
@@ -3163,9 +3163,9 @@
     "cap_class": "Large",
     "pattern": "DoubleBottom",
     "breakout_zone": 165.71,
-    "stop_loss": 181.68,
+    "stop_loss": 183.33,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "APOLLOHOSP",
@@ -3382,10 +3382,10 @@
     "sector": "Healthcare",
     "cap_class": "Large",
     "pattern": "FlatBase",
-    "breakout_zone": 1069.45,
-    "stop_loss": 1043.3,
+    "breakout_zone": 1081.7,
+    "stop_loss": 1056.48,
     "status": "Breakout Ready",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ZFCVINDIA",
@@ -3404,10 +3404,10 @@
     "sector": "Industrials",
     "cap_class": "Large",
     "pattern": "InvHS",
-    "breakout_zone": 289.82,
-    "stop_loss": 342.12,
-    "status": "Forming",
-    "added_date": "2026-05-02"
+    "breakout_zone": 243.93,
+    "stop_loss": 364.92,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SAIL",
@@ -3416,9 +3416,9 @@
     "cap_class": "Large",
     "pattern": "BullFlag",
     "breakout_zone": 186.16,
-    "stop_loss": 181.68,
+    "stop_loss": 183.33,
     "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "AUBANK",
@@ -3437,10 +3437,10 @@
     "sector": "Healthcare",
     "cap_class": "Large",
     "pattern": "FallingWedge",
-    "breakout_zone": 376.12,
-    "stop_loss": 354.17,
+    "breakout_zone": 364.46,
+    "stop_loss": 355.33,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "NRBBEARING",
@@ -3482,9 +3482,9 @@
     "cap_class": "Large",
     "pattern": "InvHS",
     "breakout_zone": 3845.6,
-    "stop_loss": 4362.8,
+    "stop_loss": 4397.69,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "POLICYBZR",
@@ -3646,10 +3646,10 @@
     "sector": "Healthcare",
     "cap_class": "Large",
     "pattern": "InvHS",
-    "breakout_zone": 370.57,
-    "stop_loss": 354.17,
+    "breakout_zone": 367.65,
+    "stop_loss": 355.33,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "MTARTECH",
@@ -3977,9 +3977,9 @@
     "cap_class": "Large",
     "pattern": "InvHS",
     "breakout_zone": 927.62,
-    "stop_loss": 1043.3,
+    "stop_loss": 1056.48,
     "status": "Breakout Ready",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ACUTAAS",
@@ -4021,9 +4021,9 @@
     "cap_class": "Large",
     "pattern": "FlatBase",
     "breakout_zone": 395.85,
-    "stop_loss": 354.17,
+    "stop_loss": 355.33,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SJS",
@@ -4098,9 +4098,9 @@
     "cap_class": "Large",
     "pattern": "InvHS",
     "breakout_zone": 171.51,
-    "stop_loss": 207.2,
+    "stop_loss": 212.47,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SAIL",
@@ -4108,10 +4108,10 @@
     "sector": "Basic Materials",
     "cap_class": "Large",
     "pattern": "InvHS",
-    "breakout_zone": 141.58,
-    "stop_loss": 181.68,
+    "breakout_zone": 129.93,
+    "stop_loss": 183.33,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "APOLLOHOSP",
@@ -4273,10 +4273,10 @@
     "sector": "Healthcare",
     "cap_class": "Large",
     "pattern": "BullFlag",
-    "breakout_zone": 1069.45,
-    "stop_loss": 1043.3,
+    "breakout_zone": 1081.7,
+    "stop_loss": 1056.48,
     "status": "Breakout Ready",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "NAVINFLUOR",
@@ -4361,10 +4361,10 @@
     "sector": "Industrials",
     "cap_class": "Large",
     "pattern": "FallingWedge",
-    "breakout_zone": 3702.11,
+    "breakout_zone": 3692.66,
     "stop_loss": 3569.26,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "MUTHOOTFIN",
@@ -4427,10 +4427,10 @@
     "sector": "Industrials",
     "cap_class": "Large",
     "pattern": "FallingWedge",
-    "breakout_zone": 4142.14,
-    "stop_loss": 4262.42,
-    "status": "Forming",
-    "added_date": "2026-05-02"
+    "breakout_zone": 4137.42,
+    "stop_loss": 4467.97,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "CHOLAHLDNG",
@@ -4823,10 +4823,10 @@
     "sector": "Basic Materials",
     "cap_class": "Mid",
     "pattern": "VCP",
-    "breakout_zone": 769.45,
-    "stop_loss": 695.49,
+    "breakout_zone": 734.8,
+    "stop_loss": 753.3,
     "status": "Forming",
-    "added_date": "2026-04-28"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "MAHLOG",
@@ -4966,10 +4966,10 @@
     "sector": "Industrials",
     "cap_class": "Mid",
     "pattern": "FallingWedge",
-    "breakout_zone": 1284.16,
-    "stop_loss": 1467.5,
+    "breakout_zone": 1283.46,
+    "stop_loss": 1472.01,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "KMEW",
@@ -5209,9 +5209,9 @@
     "cap_class": "Small",
     "pattern": "CupHandle",
     "breakout_zone": 170.46,
-    "stop_loss": 164.38,
-    "status": "Forming",
-    "added_date": "2026-05-02"
+    "stop_loss": 165.15,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "QPOWER",
@@ -5329,10 +5329,10 @@
     "sector": "Industrials",
     "cap_class": "Small",
     "pattern": "BullFlag",
-    "breakout_zone": 374.51,
-    "stop_loss": 353.45,
-    "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "breakout_zone": 378.65,
+    "stop_loss": 359.34,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "UNIVCABLES",
@@ -5494,10 +5494,10 @@
     "sector": "Basic Materials",
     "cap_class": "Small",
     "pattern": "DoubleBottom",
-    "breakout_zone": 103.85,
-    "stop_loss": 84.55,
+    "breakout_zone": 139.7,
+    "stop_loss": 118.8,
     "status": "Forming",
-    "added_date": "2026-04-30"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "FEDFINA",
@@ -5525,12 +5525,12 @@
     "stock": "EBGNG",
     "name": "GNG ELECTRONICS LIMITED",
     "sector": "Technology",
-    "cap_class": "Small",
+    "cap_class": "Mid",
     "pattern": "FlatBase",
-    "breakout_zone": 426.55,
-    "stop_loss": 404.06,
-    "status": "Forming",
-    "added_date": "2026-05-02"
+    "breakout_zone": 453.25,
+    "stop_loss": 433.62,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ETERNAL",
@@ -5571,10 +5571,10 @@
     "sector": "Basic Materials",
     "cap_class": "Large",
     "pattern": "FallingWedge",
-    "breakout_zone": 732.69,
-    "stop_loss": 754.4,
+    "breakout_zone": 731.46,
+    "stop_loss": 766.77,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "CARRARO",
@@ -5615,10 +5615,10 @@
     "sector": "Consumer Defensive",
     "cap_class": "Small",
     "pattern": "Anticipation",
-    "breakout_zone": 165.97,
-    "stop_loss": 164.38,
+    "breakout_zone": 166.75,
+    "stop_loss": 165.15,
     "status": "Setup Ready",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "IRMENERGY",
@@ -5869,9 +5869,9 @@
     "cap_class": "Large",
     "pattern": "DoubleBottom",
     "breakout_zone": 3737.7,
-    "stop_loss": 2792.14,
+    "stop_loss": 3030.24,
     "status": "Forming",
-    "added_date": "2026-04-29"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "MACPOWER",
@@ -5902,9 +5902,9 @@
     "cap_class": "Mid",
     "pattern": "BullFlag",
     "breakout_zone": 800.95,
-    "stop_loss": 763.25,
-    "status": "Breakout Ready",
-    "added_date": "2026-05-02"
+    "stop_loss": 753.3,
+    "status": "Flag Forming",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "NORTHARC",
@@ -6034,9 +6034,9 @@
     "cap_class": "Mid",
     "pattern": "DoubleBottom",
     "breakout_zone": 127.6,
-    "stop_loss": 110.97,
+    "stop_loss": 113.43,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "PGEL",
@@ -6135,7 +6135,7 @@
     "breakout_zone": 191.14,
     "stop_loss": 142.56,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "RISHABH",
@@ -6364,9 +6364,9 @@
     "cap_class": "Mid",
     "pattern": "DoubleBottom",
     "breakout_zone": 9846.92,
-    "stop_loss": 11159.04,
+    "stop_loss": 11097.91,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "DEEPINDS",
@@ -6507,9 +6507,9 @@
     "cap_class": "Small",
     "pattern": "FlatBase",
     "breakout_zone": 122.6,
-    "stop_loss": 108.63,
+    "stop_loss": 118.8,
     "status": "Forming",
-    "added_date": "2026-04-30"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SENORES",
@@ -6639,9 +6639,9 @@
     "cap_class": "Large",
     "pattern": "DoubleBottom",
     "breakout_zone": 864.58,
-    "stop_loss": 754.4,
+    "stop_loss": 766.77,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SUDEEPPHRM",
@@ -6694,9 +6694,9 @@
     "cap_class": "Small",
     "pattern": "DoubleBottom",
     "breakout_zone": 254.3,
-    "stop_loss": 342.12,
+    "stop_loss": 359.34,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "PRIVISCL",
@@ -6880,10 +6880,10 @@
     "sector": "Industrials",
     "cap_class": "Mid",
     "pattern": "BullFlag",
-    "breakout_zone": 1510.8,
-    "stop_loss": 1467.5,
+    "breakout_zone": 1510.4,
+    "stop_loss": 1472.01,
     "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "KRN",
@@ -7136,7 +7136,7 @@
     "breakout_zone": 2455.7,
     "stop_loss": 2008.75,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SCHAEFFLER",
@@ -7156,9 +7156,9 @@
     "cap_class": "Large",
     "pattern": "FlatBase",
     "breakout_zone": 3502.9,
-    "stop_loss": 3031.25,
+    "stop_loss": 3056.42,
     "status": "Forming",
-    "added_date": "2026-04-29"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "AGIIL",
@@ -7178,9 +7178,9 @@
     "cap_class": "Small",
     "pattern": "BullFlag",
     "breakout_zone": 122.6,
-    "stop_loss": 114.6,
+    "stop_loss": 118.8,
     "status": "Flag Forming",
-    "added_date": "2026-04-30"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "VEDL",
@@ -7329,12 +7329,12 @@
     "stock": "EBGNG",
     "name": "GNG ELECTRONICS LIMITED",
     "sector": "Technology",
-    "cap_class": "Small",
+    "cap_class": "Mid",
     "pattern": "DoubleBottom",
     "breakout_zone": 426.55,
-    "stop_loss": 404.06,
-    "status": "Forming",
-    "added_date": "2026-05-02"
+    "stop_loss": 433.62,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ISGEC",
@@ -7508,9 +7508,9 @@
     "cap_class": "Small",
     "pattern": "DoubleBottom",
     "breakout_zone": 171.12,
-    "stop_loss": 164.38,
+    "stop_loss": 165.15,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SAKAR",
@@ -7529,10 +7529,10 @@
     "sector": "Industrials",
     "cap_class": "Large",
     "pattern": "BullFlag",
-    "breakout_zone": 4351.6,
-    "stop_loss": 4262.42,
-    "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "breakout_zone": 4559.5,
+    "stop_loss": 4467.97,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "JSWENERGY",
@@ -7541,9 +7541,9 @@
     "cap_class": "Large",
     "pattern": "DoubleBottom",
     "breakout_zone": 516.9,
-    "stop_loss": 545.45,
+    "stop_loss": 546.51,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "HAL",
@@ -7552,9 +7552,9 @@
     "cap_class": "Large",
     "pattern": "DoubleBottom",
     "breakout_zone": 4875.69,
-    "stop_loss": 4262.42,
+    "stop_loss": 4467.97,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "LLOYDSME",
@@ -7653,7 +7653,7 @@
     "breakout_zone": 200.55,
     "stop_loss": 166.12,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "MUTHOOTMF",
@@ -7772,9 +7772,9 @@
     "cap_class": "Mid",
     "pattern": "DoubleBottom",
     "breakout_zone": 1635.79,
-    "stop_loss": 1467.5,
+    "stop_loss": 1472.01,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ANDHRSUGAR",
@@ -7829,7 +7829,7 @@
     "breakout_zone": 4624.42,
     "stop_loss": 4055.75,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ITCHOTELS",
@@ -8157,9 +8157,9 @@
     "cap_class": "Small",
     "pattern": "InvHS",
     "breakout_zone": 156.06,
-    "stop_loss": 153.26,
+    "stop_loss": 158.7,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ATALREAL",
@@ -8256,9 +8256,9 @@
     "cap_class": "Mid",
     "pattern": "DoubleBottom",
     "breakout_zone": 599.34,
-    "stop_loss": 763.25,
+    "stop_loss": 753.3,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "KRN",
@@ -8376,10 +8376,10 @@
     "sector": "Consumer Cyclical",
     "cap_class": "Small",
     "pattern": "BullFlag",
-    "breakout_zone": 159.68,
-    "stop_loss": 153.26,
+    "breakout_zone": 163.93,
+    "stop_loss": 158.7,
     "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SUPREMEIND",
@@ -8388,9 +8388,9 @@
     "cap_class": "Large",
     "pattern": "FlatBase",
     "breakout_zone": 3830.4,
-    "stop_loss": 3563.83,
+    "stop_loss": 3564.33,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "HARSHA",
@@ -8497,10 +8497,10 @@
     "sector": "Financial Services",
     "cap_class": "Mid",
     "pattern": "BullFlag",
-    "breakout_zone": 139.07,
-    "stop_loss": 135.96,
+    "breakout_zone": 142.54,
+    "stop_loss": 139.46,
     "status": "Breakout Ready",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "BEPL",
@@ -8740,9 +8740,9 @@
     "cap_class": "Large",
     "pattern": "InvHS",
     "breakout_zone": 494.38,
-    "stop_loss": 545.45,
+    "stop_loss": 546.51,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "WABAG",
@@ -8751,9 +8751,9 @@
     "cap_class": "Mid",
     "pattern": "InvHS",
     "breakout_zone": 1324.85,
-    "stop_loss": 1467.5,
+    "stop_loss": 1472.01,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ETERNAL",
@@ -8960,9 +8960,9 @@
     "cap_class": "Mid",
     "pattern": "InvHS",
     "breakout_zone": 8978.87,
-    "stop_loss": 11159.04,
+    "stop_loss": 11097.91,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ISGEC",
@@ -9257,9 +9257,9 @@
     "cap_class": "Large",
     "pattern": "InvHS",
     "breakout_zone": 4220.35,
-    "stop_loss": 4262.42,
-    "status": "Forming",
-    "added_date": "2026-05-02"
+    "stop_loss": 4467.97,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "HIRECT",
@@ -9279,9 +9279,9 @@
     "cap_class": "Small",
     "pattern": "InvHS",
     "breakout_zone": 242.32,
-    "stop_loss": 342.12,
+    "stop_loss": 359.34,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "TVSHLTD",
@@ -9411,9 +9411,9 @@
     "cap_class": "Small",
     "pattern": "InvHS",
     "breakout_zone": 96.7,
-    "stop_loss": 79.83,
+    "stop_loss": 118.8,
     "status": "Forming",
-    "added_date": "2026-04-30"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "BEPL",
@@ -9433,9 +9433,9 @@
     "cap_class": "Mid",
     "pattern": "BullFlag",
     "breakout_zone": 11791.0,
-    "stop_loss": 11336.64,
+    "stop_loss": 11251.38,
     "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "PASHUPATI",
@@ -9477,9 +9477,9 @@
     "cap_class": "Small",
     "pattern": "FlatBase",
     "breakout_zone": 165.2,
-    "stop_loss": 153.26,
+    "stop_loss": 158.7,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SENORES",
@@ -9521,9 +9521,9 @@
     "cap_class": "Mid",
     "pattern": "FlatBase",
     "breakout_zone": 1510.8,
-    "stop_loss": 1467.5,
+    "stop_loss": 1472.01,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "CENTRALBK",
@@ -9664,9 +9664,9 @@
     "cap_class": "Large",
     "pattern": "BullFlag",
     "breakout_zone": 3502.9,
-    "stop_loss": 3206.53,
+    "stop_loss": 3056.42,
     "status": "Flag Forming",
-    "added_date": "2026-04-29"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "TFCILTD",
@@ -9719,9 +9719,9 @@
     "cap_class": "Mid",
     "pattern": "InvHS",
     "breakout_zone": 1560.55,
-    "stop_loss": 1377.41,
+    "stop_loss": 1366.95,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "EMMVEE",
@@ -10038,9 +10038,9 @@
     "cap_class": "Mid",
     "pattern": "InvHS",
     "breakout_zone": 111.54,
-    "stop_loss": 110.97,
+    "stop_loss": 113.43,
     "status": "Breakout Ready",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ITCHOTELS",
@@ -10082,9 +10082,9 @@
     "cap_class": "Large",
     "pattern": "InvHS",
     "breakout_zone": 3137.1,
-    "stop_loss": 2346.43,
+    "stop_loss": 3030.24,
     "status": "Forming",
-    "added_date": "2026-04-29"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "FIEMIND",
@@ -10159,9 +10159,9 @@
     "cap_class": "Mid",
     "pattern": "InvHS",
     "breakout_zone": 492.95,
-    "stop_loss": 763.25,
+    "stop_loss": 753.3,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "TVSHLTD",
@@ -10224,10 +10224,10 @@
     "sector": "Consumer Defensive",
     "cap_class": "Small",
     "pattern": "InvHS",
-    "breakout_zone": 164.37,
-    "stop_loss": 164.38,
-    "status": "Forming",
-    "added_date": "2026-05-02"
+    "breakout_zone": 124.67,
+    "stop_loss": 165.15,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "JSL",
@@ -10235,10 +10235,10 @@
     "sector": "Basic Materials",
     "cap_class": "Large",
     "pattern": "Stage2Breakout",
-    "breakout_zone": 771.68,
-    "stop_loss": 674.83,
+    "breakout_zone": 771.64,
+    "stop_loss": 766.77,
     "status": "Forming",
-    "added_date": "2026-04-30"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "QPOWER",
@@ -10290,10 +10290,10 @@
     "sector": "Basic Materials",
     "cap_class": "Large",
     "pattern": "InvHS",
-    "breakout_zone": 790.32,
-    "stop_loss": 754.4,
+    "breakout_zone": 713.19,
+    "stop_loss": 766.77,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "MUTHOOTFIN",
@@ -10323,10 +10323,10 @@
     "sector": "Financial Services",
     "cap_class": "Mid",
     "pattern": "InvHS",
-    "breakout_zone": 136.19,
-    "stop_loss": 135.96,
+    "breakout_zone": 141.68,
+    "stop_loss": 139.46,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "STYLAMIND",
@@ -10389,10 +10389,10 @@
     "sector": "Financial Services",
     "cap_class": "Mid",
     "pattern": "BullFlag",
-    "breakout_zone": 123.99,
-    "stop_loss": 111.97,
+    "breakout_zone": 123.94,
+    "stop_loss": 113.43,
     "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "EMCURE",
@@ -10412,9 +10412,9 @@
     "cap_class": "Large",
     "pattern": "FlatBase",
     "breakout_zone": 789.9,
-    "stop_loss": 754.4,
+    "stop_loss": 766.77,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "MAHABANK",
@@ -10544,9 +10544,9 @@
     "cap_class": "Small",
     "pattern": "FlatBase",
     "breakout_zone": 168.64,
-    "stop_loss": 164.38,
+    "stop_loss": 165.15,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "HOMEFIRST",
@@ -10896,9 +10896,9 @@
     "cap_class": "Large",
     "pattern": "BullFlag",
     "breakout_zone": 782.4,
-    "stop_loss": 754.4,
+    "stop_loss": 766.77,
     "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "CHOLAHLDNG",
@@ -11028,9 +11028,9 @@
     "cap_class": "Large",
     "pattern": "FlatBase",
     "breakout_zone": 580.9,
-    "stop_loss": 545.45,
+    "stop_loss": 546.51,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ADVAIT",
@@ -11148,10 +11148,10 @@
     "sector": "Consumer Defensive",
     "cap_class": "Small",
     "pattern": "BullFlag",
-    "breakout_zone": 165.97,
-    "stop_loss": 164.38,
-    "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "breakout_zone": 166.75,
+    "stop_loss": 165.15,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SRF",
@@ -11423,10 +11423,10 @@
     "sector": "Financial Services",
     "cap_class": "Mid",
     "pattern": "FlatBase",
-    "breakout_zone": 140.56,
-    "stop_loss": 135.96,
+    "breakout_zone": 142.54,
+    "stop_loss": 139.46,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "KMEW",
@@ -11457,9 +11457,9 @@
     "cap_class": "Mid",
     "pattern": "FlatBase",
     "breakout_zone": 123.99,
-    "stop_loss": 111.97,
+    "stop_loss": 113.43,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "LTF",
@@ -11489,10 +11489,10 @@
     "sector": "Utilities",
     "cap_class": "Large",
     "pattern": "BullFlag",
-    "breakout_zone": 580.9,
+    "breakout_zone": 562.3,
     "stop_loss": 549.19,
     "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "NGLFINE",
@@ -11602,7 +11602,7 @@
     "breakout_zone": 1564.1,
     "stop_loss": 1387.88,
     "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "CARTRADE",
@@ -11765,9 +11765,9 @@
     "cap_class": "Mid",
     "pattern": "DoubleBottom",
     "breakout_zone": 8670.5,
-    "stop_loss": 11385.16,
-    "status": "Breakout Ready",
-    "added_date": "2026-05-02"
+    "stop_loss": 12104.77,
+    "status": "Forming",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "RADICO",
@@ -11819,10 +11819,10 @@
     "sector": "Industrials",
     "cap_class": "Mid",
     "pattern": "BullFlag",
-    "breakout_zone": 11793.0,
-    "stop_loss": 11385.16,
+    "breakout_zone": 12520.0,
+    "stop_loss": 12104.77,
     "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "RBLBANK",
@@ -11864,9 +11864,9 @@
     "cap_class": "Mid",
     "pattern": "InvHS",
     "breakout_zone": 7731.25,
-    "stop_loss": 11385.16,
-    "status": "Breakout Ready",
-    "added_date": "2026-05-02"
+    "stop_loss": 12104.77,
+    "status": "Forming",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "KIRLOSENG",
@@ -12336,10 +12336,10 @@
     "sector": "Technology",
     "cap_class": "Mid",
     "pattern": "MomBurst",
-    "breakout_zone": 971.55,
-    "stop_loss": 932.69,
-    "status": "Burst (low vol)",
-    "added_date": "2026-04-28"
+    "breakout_zone": 1018.55,
+    "stop_loss": 992.85,
+    "status": "Burst Active",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ASIANTILES",
@@ -12777,9 +12777,9 @@
     "cap_class": "Large",
     "pattern": "DoubleBottom",
     "breakout_zone": 2686.0,
-    "stop_loss": 2913.75,
+    "stop_loss": 2850.15,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "TATASTEEL",
@@ -12799,9 +12799,9 @@
     "cap_class": "Large",
     "pattern": "FlatBase",
     "breakout_zone": 2971.5,
-    "stop_loss": 2913.75,
+    "stop_loss": 2850.15,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "RBLBANK",
@@ -13151,9 +13151,9 @@
     "cap_class": "Large",
     "pattern": "BullFlag",
     "breakout_zone": 2971.5,
-    "stop_loss": 2913.75,
+    "stop_loss": 2854.64,
     "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "NYKAA",
@@ -13184,9 +13184,9 @@
     "cap_class": "Large",
     "pattern": "InvHS",
     "breakout_zone": 2767.0,
-    "stop_loss": 2913.75,
+    "stop_loss": 2850.15,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "METROPOLIS",
@@ -13569,9 +13569,9 @@
     "cap_class": "Mid",
     "pattern": "DoubleBottom",
     "breakout_zone": 903.1,
-    "stop_loss": 930.94,
+    "stop_loss": 986.42,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SHREEJISPG",
@@ -13591,9 +13591,9 @@
     "cap_class": "Small",
     "pattern": "FlatBase",
     "breakout_zone": 548.75,
-    "stop_loss": 510.33,
-    "status": "Forming",
-    "added_date": "2026-05-02"
+    "stop_loss": 532.25,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "VSSL",
@@ -13722,10 +13722,10 @@
     "sector": "Technology",
     "cap_class": "Mid",
     "pattern": "BullFlag",
-    "breakout_zone": 983.5,
-    "stop_loss": 939.77,
-    "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "breakout_zone": 1018.55,
+    "stop_loss": 986.42,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SHADOWFAX",
@@ -13745,9 +13745,9 @@
     "cap_class": "Large",
     "pattern": "DoubleBottom",
     "breakout_zone": 1109.9,
-    "stop_loss": 979.51,
+    "stop_loss": 996.2,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "MBAPL",
@@ -13756,9 +13756,9 @@
     "cap_class": "Small",
     "pattern": "DoubleBottom",
     "breakout_zone": 459.75,
-    "stop_loss": 510.33,
-    "status": "Forming",
-    "added_date": "2026-05-02"
+    "stop_loss": 532.25,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ORICONENT",
@@ -13932,9 +13932,9 @@
     "cap_class": "Mid",
     "pattern": "InvHS",
     "breakout_zone": 820.5,
-    "stop_loss": 930.94,
+    "stop_loss": 986.42,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "RAMCOCEM",
@@ -13964,10 +13964,10 @@
     "sector": "Technology",
     "cap_class": "Mid",
     "pattern": "FlatBase",
-    "breakout_zone": 997.75,
-    "stop_loss": 930.94,
+    "breakout_zone": 1018.55,
+    "stop_loss": 986.42,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "TATACAP",
@@ -14042,9 +14042,9 @@
     "cap_class": "Large",
     "pattern": "InvHS",
     "breakout_zone": 1038.9,
-    "stop_loss": 979.51,
+    "stop_loss": 996.2,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SHREEJISPG",
@@ -14075,9 +14075,9 @@
     "cap_class": "Large",
     "pattern": "AscTriangle",
     "breakout_zone": 1009.85,
-    "stop_loss": 979.51,
+    "stop_loss": 996.2,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "MBAPL",
@@ -14086,9 +14086,9 @@
     "cap_class": "Small",
     "pattern": "InvHS",
     "breakout_zone": 435.82,
-    "stop_loss": 510.33,
-    "status": "Forming",
-    "added_date": "2026-05-02"
+    "stop_loss": 532.25,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "INDHOTEL",
@@ -14317,9 +14317,9 @@
     "cap_class": "Large",
     "pattern": "FlatBase",
     "breakout_zone": 1043.1,
-    "stop_loss": 979.51,
+    "stop_loss": 996.2,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "RAMCOCEM",
@@ -14382,10 +14382,10 @@
     "sector": "Healthcare",
     "cap_class": "Large",
     "pattern": "BullFlag",
-    "breakout_zone": 1009.85,
-    "stop_loss": 979.51,
-    "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "breakout_zone": 1011.55,
+    "stop_loss": 996.2,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "GLAND",
@@ -14470,10 +14470,10 @@
     "sector": "Basic Materials",
     "cap_class": "Small",
     "pattern": "BullFlag",
-    "breakout_zone": 526.5,
-    "stop_loss": 510.33,
-    "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "breakout_zone": 548.75,
+    "stop_loss": 532.25,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "RATNAVEER",
@@ -14878,9 +14878,9 @@
     "cap_class": "Large",
     "pattern": "FlatBase",
     "breakout_zone": 4598.3,
-    "stop_loss": 4362.8,
+    "stop_loss": 4397.69,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ENRIN",
@@ -14954,10 +14954,10 @@
     "sector": "Financial Services",
     "cap_class": "Large",
     "pattern": "FlatBase",
-    "breakout_zone": 219.85,
-    "stop_loss": 207.2,
+    "breakout_zone": 220.05,
+    "stop_loss": 212.47,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "PVRINOX",
@@ -15064,10 +15064,10 @@
     "sector": "Basic Materials",
     "cap_class": "Large",
     "pattern": "CupHandle",
-    "breakout_zone": 822.55,
-    "stop_loss": 754.4,
+    "breakout_zone": 806.95,
+    "stop_loss": 766.77,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SAMHI",
@@ -15075,10 +15075,10 @@
     "sector": "Consumer Cyclical",
     "cap_class": "Small",
     "pattern": "CupHandle",
-    "breakout_zone": 170.21,
-    "stop_loss": 153.26,
+    "breakout_zone": 170.48,
+    "stop_loss": 158.7,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "DALBHARAT",
@@ -15306,10 +15306,10 @@
     "sector": "Consumer Defensive",
     "cap_class": "Small",
     "pattern": "FallingWedge",
-    "breakout_zone": 160.36,
-    "stop_loss": 164.38,
-    "status": "Forming",
-    "added_date": "2026-05-02"
+    "breakout_zone": 160.24,
+    "stop_loss": 165.15,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "JAYBARMARU",
@@ -16044,9 +16044,9 @@
     "cap_class": "Large",
     "pattern": "CupHandle",
     "breakout_zone": 3458.94,
-    "stop_loss": 2551.26,
+    "stop_loss": 3030.24,
     "status": "Forming",
-    "added_date": "2026-04-29"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "HINDZINC",
@@ -16065,10 +16065,10 @@
     "sector": "Industrials",
     "cap_class": "Large",
     "pattern": "Stage2Breakout",
-    "breakout_zone": 4350.0,
-    "stop_loss": 3382.58,
-    "status": "Forming",
-    "added_date": "2026-04-30"
+    "breakout_zone": 4347.67,
+    "stop_loss": 4467.97,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "HINDZINC",
@@ -16682,9 +16682,9 @@
     "cap_class": "Small",
     "pattern": "FlatBase",
     "breakout_zone": 47.5,
-    "stop_loss": 45.15,
+    "stop_loss": 45.6,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "DEEPINDS",
@@ -16726,9 +16726,9 @@
     "cap_class": "Small",
     "pattern": "DoubleBottom",
     "breakout_zone": 46.01,
-    "stop_loss": 45.15,
-    "status": "Breakout Ready",
-    "added_date": "2026-05-02"
+    "stop_loss": 45.6,
+    "status": "Forming",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "SJS",
@@ -16803,9 +16803,9 @@
     "cap_class": "Small",
     "pattern": "InvHS",
     "breakout_zone": 38.22,
-    "stop_loss": 45.15,
-    "status": "Breakout Ready",
-    "added_date": "2026-05-02"
+    "stop_loss": 45.6,
+    "status": "Forming",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "DWARKESH",
@@ -16814,9 +16814,9 @@
     "cap_class": "Small",
     "pattern": "BullFlag",
     "breakout_zone": 47.5,
-    "stop_loss": 45.15,
+    "stop_loss": 45.6,
     "status": "Flag Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "MEGASTAR",
@@ -17672,9 +17672,9 @@
     "cap_class": "Small",
     "pattern": "CupHandle",
     "breakout_zone": 47.1,
-    "stop_loss": 45.15,
-    "status": "Breakout Ready",
-    "added_date": "2026-05-02"
+    "stop_loss": 45.6,
+    "status": "Forming",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "GLOBUSSPR",
@@ -17925,9 +17925,9 @@
     "cap_class": "Mid",
     "pattern": "FlatBase",
     "breakout_zone": 12417.0,
-    "stop_loss": 11159.04,
+    "stop_loss": 11097.91,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ADANIPOWER",
@@ -17979,10 +17979,10 @@
     "sector": "Industrials",
     "cap_class": "Large",
     "pattern": "FlatBase",
-    "breakout_zone": 4400.6,
-    "stop_loss": 4262.42,
-    "status": "Forming",
-    "added_date": "2026-05-02"
+    "breakout_zone": 4559.5,
+    "stop_loss": 4467.97,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
   },
   {
     "stock": "GLOBUSSPR",
@@ -18015,7 +18015,7 @@
     "breakout_zone": 1631.1,
     "stop_loss": 1387.88,
     "status": "Forming",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "ULTRACEMCO",
@@ -18089,10 +18089,10 @@
     "sector": "Healthcare",
     "cap_class": "Large",
     "pattern": "PocketPivot",
-    "breakout_zone": 1055.1,
-    "stop_loss": 1048.53,
+    "breakout_zone": 1069.45,
+    "stop_loss": 1061.52,
     "status": "Pocket Pivot",
-    "added_date": "2026-05-02"
+    "added_date": "2026-05-05"
   },
   {
     "stock": "LTFOODS",
@@ -22821,6 +22821,578 @@
     "pattern": "BullFlag",
     "breakout_zone": 301.4,
     "stop_loss": 288.84,
+    "status": "Flag Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "BHEL",
+    "name": "Bharat Heavy Electricals Limited",
+    "sector": "Industrials",
+    "cap_class": "Large",
+    "pattern": "PocketPivot",
+    "breakout_zone": 352.41,
+    "stop_loss": 367.35,
+    "status": "Pocket Pivot",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "JBCHEPHARM",
+    "name": "J. B. Chemicals & Pharmaceuticals Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
+    "pattern": "FallingWedge",
+    "breakout_zone": 2007.48,
+    "stop_loss": 2056.8,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "HAL",
+    "name": "Hindustan Aeronautics Limited",
+    "sector": "Industrials",
+    "cap_class": "Large",
+    "pattern": "PocketPivot",
+    "breakout_zone": 4338.8,
+    "stop_loss": 4486.27,
+    "status": "Pocket Pivot",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "VOLTAS",
+    "name": "Voltas Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Large",
+    "pattern": "FallingWedge",
+    "breakout_zone": 1456.89,
+    "stop_loss": 1413.04,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "SYRMA",
+    "name": "Syrma SGS Technology Limited",
+    "sector": "Technology",
+    "cap_class": "Mid",
+    "pattern": "PocketPivot",
+    "breakout_zone": 958.95,
+    "stop_loss": 992.85,
+    "status": "Pocket Pivot",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "JINDALSTEL",
+    "name": "Jindal Steel Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
+    "pattern": "PocketPivot",
+    "breakout_zone": 1223.1,
+    "stop_loss": 1242.34,
+    "status": "Pocket Pivot",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "MARICO",
+    "name": "Marico Limited",
+    "sector": "Consumer Defensive",
+    "cap_class": "Large",
+    "pattern": "FallingWedge",
+    "breakout_zone": 759.15,
+    "stop_loss": 775.13,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "VOLTAS",
+    "name": "Voltas Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Large",
+    "pattern": "VCP",
+    "breakout_zone": 1561.3,
+    "stop_loss": 1413.04,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "GREENPLY",
+    "name": "Greenply Industries Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Small",
+    "pattern": "VCP",
+    "breakout_zone": 284.45,
+    "stop_loss": 260.58,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "JBCHEPHARM",
+    "name": "J. B. Chemicals & Pharmaceuticals Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
+    "pattern": "CupHandle",
+    "breakout_zone": 2117.38,
+    "stop_loss": 2056.8,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "GREENPLY",
+    "name": "Greenply Industries Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Small",
+    "pattern": "FallingWedge",
+    "breakout_zone": 215.86,
+    "stop_loss": 253.94,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "JKTYRE",
+    "name": "JK Tyre & Industries Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Mid",
+    "pattern": "DoubleBottom",
+    "breakout_zone": 604.9,
+    "stop_loss": 393.3,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "MARICO",
+    "name": "Marico Limited",
+    "sector": "Consumer Defensive",
+    "cap_class": "Large",
+    "pattern": "CupHandle",
+    "breakout_zone": 802.51,
+    "stop_loss": 775.13,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "JKTYRE",
+    "name": "JK Tyre & Industries Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Mid",
+    "pattern": "FallingWedge",
+    "breakout_zone": 454.9,
+    "stop_loss": 393.3,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "JSL",
+    "name": "Jindal Stainless Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
+    "pattern": "Anticipation",
+    "breakout_zone": 789.9,
+    "stop_loss": 766.77,
+    "status": "Setup Ready",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "WELCORP",
+    "name": "Welspun Corp Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
+    "pattern": "BullFlag",
+    "breakout_zone": 1267.3,
+    "stop_loss": 1214.12,
+    "status": "Flag Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "MARICO",
+    "name": "Marico Limited",
+    "sector": "Consumer Defensive",
+    "cap_class": "Large",
+    "pattern": "Anticipation",
+    "breakout_zone": 787.0,
+    "stop_loss": 775.13,
+    "status": "Setup Ready",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "HAL",
+    "name": "Hindustan Aeronautics Limited",
+    "sector": "Industrials",
+    "cap_class": "Large",
+    "pattern": "AscTriangle",
+    "breakout_zone": 4394.35,
+    "stop_loss": 4467.97,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "GREENPLY",
+    "name": "Greenply Industries Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Small",
+    "pattern": "BullFlag",
+    "breakout_zone": 284.45,
+    "stop_loss": 260.58,
+    "status": "Flag Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "EICHERMOT",
+    "name": "Eicher Motors Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Large",
+    "pattern": "DoubleBottom",
+    "breakout_zone": 8190.0,
+    "stop_loss": 7187.57,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "HAL",
+    "name": "Hindustan Aeronautics Limited",
+    "sector": "Industrials",
+    "cap_class": "Large",
+    "pattern": "MomBurst",
+    "breakout_zone": 4559.5,
+    "stop_loss": 4486.27,
+    "status": "Burst Active",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "VOLTAS",
+    "name": "Voltas Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Large",
+    "pattern": "DoubleBottom",
+    "breakout_zone": 1561.3,
+    "stop_loss": 1413.04,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "JINDALSTEL",
+    "name": "Jindal Steel Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
+    "pattern": "FlatBase",
+    "breakout_zone": 1288.8,
+    "stop_loss": 1237.57,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "WELCORP",
+    "name": "Welspun Corp Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
+    "pattern": "DoubleBottom",
+    "breakout_zone": 965.75,
+    "stop_loss": 1203.02,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "MBAPL",
+    "name": "Madhya Bharat Agro Products Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Small",
+    "pattern": "MomBurst",
+    "breakout_zone": 548.4,
+    "stop_loss": 535.48,
+    "status": "Burst Active",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "JINDALSTEL",
+    "name": "Jindal Steel Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
+    "pattern": "DoubleBottom",
+    "breakout_zone": 1266.5,
+    "stop_loss": 1237.57,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "MARICO",
+    "name": "Marico Limited",
+    "sector": "Consumer Defensive",
+    "cap_class": "Large",
+    "pattern": "DoubleBottom",
+    "breakout_zone": 810.35,
+    "stop_loss": 775.13,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "GREENPLY",
+    "name": "Greenply Industries Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Small",
+    "pattern": "DoubleBottom",
+    "breakout_zone": 341.31,
+    "stop_loss": 296.03,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "DRREDDY",
+    "name": "Dr. Reddy's Laboratories Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
+    "pattern": "DoubleBottom",
+    "breakout_zone": 1325.5,
+    "stop_loss": 1256.0,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "JBCHEPHARM",
+    "name": "J. B. Chemicals & Pharmaceuticals Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
+    "pattern": "DoubleBottom",
+    "breakout_zone": 2138.6,
+    "stop_loss": 2056.8,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "JBCHEPHARM",
+    "name": "J. B. Chemicals & Pharmaceuticals Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
+    "pattern": "FlatBase",
+    "breakout_zone": 2082.1,
+    "stop_loss": 2056.8,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "VOLTAS",
+    "name": "Voltas Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Large",
+    "pattern": "BullFlag",
+    "breakout_zone": 1474.8,
+    "stop_loss": 1413.04,
+    "status": "Flag Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "VOLTAS",
+    "name": "Voltas Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Large",
+    "pattern": "InvHS",
+    "breakout_zone": 1360.35,
+    "stop_loss": 1413.04,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "MARICO",
+    "name": "Marico Limited",
+    "sector": "Consumer Defensive",
+    "cap_class": "Large",
+    "pattern": "FlatBase",
+    "breakout_zone": 789.9,
+    "stop_loss": 775.13,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "JBCHEPHARM",
+    "name": "J. B. Chemicals & Pharmaceuticals Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
+    "pattern": "InvHS",
+    "breakout_zone": 1783.15,
+    "stop_loss": 2056.8,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "JKTYRE",
+    "name": "JK Tyre & Industries Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Mid",
+    "pattern": "FlatBase",
+    "breakout_zone": 432.9,
+    "stop_loss": 393.3,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "EICHERMOT",
+    "name": "Eicher Motors Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Large",
+    "pattern": "FlatBase",
+    "breakout_zone": 7424.0,
+    "stop_loss": 7187.57,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "EICHERMOT",
+    "name": "Eicher Motors Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Large",
+    "pattern": "InvHS",
+    "breakout_zone": 7141.0,
+    "stop_loss": 7187.57,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "MARICO",
+    "name": "Marico Limited",
+    "sector": "Consumer Defensive",
+    "cap_class": "Large",
+    "pattern": "InvHS",
+    "breakout_zone": 776.58,
+    "stop_loss": 775.13,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "EICHERMOT",
+    "name": "Eicher Motors Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Large",
+    "pattern": "Stage2Breakout",
+    "breakout_zone": 7176.61,
+    "stop_loss": 7187.57,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "DRREDDY",
+    "name": "Dr. Reddy's Laboratories Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
+    "pattern": "Stage2Breakout",
+    "breakout_zone": 1255.32,
+    "stop_loss": 1256.0,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "WELCORP",
+    "name": "Welspun Corp Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
+    "pattern": "InvHS",
+    "breakout_zone": 813.3,
+    "stop_loss": 1203.02,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "DRREDDY",
+    "name": "Dr. Reddy's Laboratories Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
+    "pattern": "FlatBase",
+    "breakout_zone": 1354.6,
+    "stop_loss": 1256.0,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "DRREDDY",
+    "name": "Dr. Reddy's Laboratories Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
+    "pattern": "InvHS",
+    "breakout_zone": 1261.65,
+    "stop_loss": 1256.0,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "JKTYRE",
+    "name": "JK Tyre & Industries Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Mid",
+    "pattern": "InvHS",
+    "breakout_zone": 351.18,
+    "stop_loss": 393.3,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "MARICO",
+    "name": "Marico Limited",
+    "sector": "Consumer Defensive",
+    "cap_class": "Large",
+    "pattern": "BullFlag",
+    "breakout_zone": 784.55,
+    "stop_loss": 775.13,
+    "status": "Flag Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "JINDALSTEL",
+    "name": "Jindal Steel Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
+    "pattern": "BullFlag",
+    "breakout_zone": 1261.4,
+    "stop_loss": 1237.57,
+    "status": "Breakout Ready",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "GREENPLY",
+    "name": "Greenply Industries Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Small",
+    "pattern": "InvHS",
+    "breakout_zone": 241.97,
+    "stop_loss": 253.94,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "VOLTAS",
+    "name": "Voltas Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Large",
+    "pattern": "FlatBase",
+    "breakout_zone": 1515.0,
+    "stop_loss": 1413.04,
+    "status": "Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "EICHERMOT",
+    "name": "Eicher Motors Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Large",
+    "pattern": "BullFlag",
+    "breakout_zone": 7329.0,
+    "stop_loss": 7187.57,
+    "status": "Flag Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "DRREDDY",
+    "name": "Dr. Reddy's Laboratories Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
+    "pattern": "BullFlag",
+    "breakout_zone": 1329.8,
+    "stop_loss": 1261.46,
+    "status": "Flag Forming",
+    "added_date": "2026-05-05"
+  },
+  {
+    "stock": "JKTYRE",
+    "name": "JK Tyre & Industries Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Mid",
+    "pattern": "BullFlag",
+    "breakout_zone": 406.95,
+    "stop_loss": 393.3,
     "status": "Flag Forming",
     "added_date": "2026-05-05"
   }
