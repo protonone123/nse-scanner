@@ -73,7 +73,7 @@ def _now():  return datetime.now(_IST)
 def _today(): return _now().date()
 def _ist(fmt="%H:%M IST"): return _now().strftime(fmt)
 
-MAX_WORKERS   = 6
+MAX_WORKERS   = 10
 DL_RETRIES    = 3
 DL_BACKOFF    = 3.0
 MARKET_OPEN   = (9, 15)    # IST
@@ -165,6 +165,9 @@ def dl(sym: str, interval: str = "1d", period: str = "1y") -> pd.DataFrame | Non
             if "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
                 log.warning(f"401 {sym} attempt {attempt+1} — reset session")
                 _reset_session(); time.sleep(5)
+            elif "delisted" in msg.lower() or "no price data" in msg.lower():
+                log.debug(f"Skip {sym} {interval}: delisted/no data")
+                return None  # don't retry delisted stocks
             elif attempt < DL_RETRIES - 1:
                 time.sleep(DL_BACKOFF * (attempt + 1))
     return None
@@ -187,6 +190,9 @@ def dl_since(sym: str, interval: str, since_date: str) -> pd.DataFrame | None:
             msg = str(e)
             if "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
                 _reset_session(); time.sleep(5)
+            elif "delisted" in msg.lower() or "no price data" in msg.lower():
+                log.debug(f"Skip {sym} {interval}: delisted/no data")
+                return None
             elif attempt < DL_RETRIES - 1:
                 time.sleep(DL_BACKOFF * (attempt + 1))
     return None
@@ -841,7 +847,7 @@ def run_intraday_update(stocks: list[str]):
     t0 = time.time()
     ok = err = 0
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:  # 10 workers
         futs = {ex.submit(update_stock_intraday, s): s for s in stocks}
         for fut in as_completed(futs):
             try:
@@ -1051,20 +1057,7 @@ def main():
         stocks = load_universe()
         run_eod_update(stocks)
         update_sectors()
-        # Fetch today's NSE bulk deals
-        try:
-            from fundamentals import fetch_nse_bulk_deals, batch_refresh_fundamentals
-            log.info("Fetching NSE bulk deals...")
-            fetch_nse_bulk_deals()
-            # Refresh fundamentals for watchlist stocks (priority)
-            wl_stocks = load_watchlist()
-            if wl_stocks:
-                log.info(f"Refreshing fundamentals for {len(wl_stocks)} watchlist stocks")
-                batch_refresh_fundamentals(wl_stocks, workers=4)
-        except ImportError:
-            log.warning("fundamentals.py not found — skipping bulk deals + fund refresh")
-        except Exception as e:
-            log.warning(f"Bulk deals/fundamentals: {e}")
+        # Fundamentals fetch disabled (avoids 401 rate limiting)
         return
 
     if args.bootstrap:
