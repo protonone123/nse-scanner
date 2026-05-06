@@ -1,29 +1,29 @@
-name: NSE Live Scanner v3.5
+name: NSE Live Scanner v4.1
 
 on:
   schedule:
-    # ── DAILY SCANS (full scan) ──────────────────────────────────
-    # 8:00 AM IST  = 2:30 UTC
+    # ── DAILY FULL SCANS (EOD update + 2139-stock pattern scan) ──────────────
+    # 8:00 AM IST  = 02:30 UTC
     - cron: "30 2 * * 1-5"
-    # 12:30 PM IST = 7:00 UTC
+    # 12:30 PM IST = 07:00 UTC
     - cron: "0 7 * * 1-5"
-    # 4:30 PM IST  = 11:00 UTC
+    # 4:30 PM IST  = 11:00 UTC  (post-close final)
     - cron: "0 11 * * 1-5"
 
-    # ── 30-MIN SCANS (market hours 9:15 AM – 3:30 PM IST) ────────
-    - cron: "45 3 * * 1-5"   # 9:15 AM IST
-    - cron: "15 4 * * 1-5"   # 9:45 AM IST
-    - cron: "45 4 * * 1-5"   # 10:15 AM IST
-    - cron: "15 5 * * 1-5"   # 10:45 AM IST
-    - cron: "45 5 * * 1-5"   # 11:15 AM IST
-    - cron: "15 6 * * 1-5"   # 11:45 AM IST
-    - cron: "45 6 * * 1-5"   # 12:15 PM IST
-    - cron: "15 7 * * 1-5"   # 12:45 PM IST
-    - cron: "45 7 * * 1-5"   # 1:15 PM IST
-    - cron: "15 8 * * 1-5"   # 1:45 PM IST
-    - cron: "45 8 * * 1-5"   # 2:15 PM IST
-    - cron: "15 9 * * 1-5"   # 2:45 PM IST
-    - cron: "45 9 * * 1-5"   # 3:15 PM IST
+    # ── 30-MIN INTRADAY SCANS (09:15 AM – 03:30 PM IST) ─────────────────────
+    - cron: "45 3 * * 1-5"   # 09:15 IST ← market open
+    - cron: "15 4 * * 1-5"   # 09:45 IST
+    - cron: "45 4 * * 1-5"   # 10:15 IST
+    - cron: "15 5 * * 1-5"   # 10:45 IST
+    - cron: "45 5 * * 1-5"   # 11:15 IST
+    - cron: "15 6 * * 1-5"   # 11:45 IST
+    - cron: "45 6 * * 1-5"   # 12:15 IST
+    - cron: "15 7 * * 1-5"   # 12:45 IST
+    - cron: "45 7 * * 1-5"   # 1:15 IST
+    - cron: "15 8 * * 1-5"   # 1:45 IST
+    - cron: "45 8 * * 1-5"   # 2:15 IST
+    - cron: "15 9 * * 1-5"   # 2:45 IST
+    - cron: "45 9 * * 1-5"   # 3:15 IST ← near close
 
   workflow_dispatch:
     inputs:
@@ -36,37 +36,46 @@ on:
 permissions:
   contents: write
 
+# ════════════════════════════════════════════════════════════════════
+# DAILY — update all 2139 stocks, then full pattern scan
+# Timeout 55 min: warm cache ~5 min, EOD update ~15 min, scan ~25 min
+# ════════════════════════════════════════════════════════════════════
 jobs:
-  scan:
+
+  daily:
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'daily') ||
+      github.event.schedule == '30 2 * * 1-5' ||
+      github.event.schedule == '0 7 * * 1-5'  ||
+      github.event.schedule == '0 11 * * 1-5'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 55
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Cache pip dependencies
+      - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ── Restore price cache (the key performance improvement) ────
-      # Cache key rotates weekly so stale data doesn't accumulate forever.
-      # On cache miss (first run or Monday): scanner does full 1y download.
-      # On cache hit: scanner only downloads last 7 days per stock.
+      # Week step MUST come before cache restore (key would be empty otherwise)
+      - name: Get week number
+        id: week
+        run: echo "week=$(date -u +%V)" >> $GITHUB_OUTPUT
+
       - name: Restore price cache
-        id: price-cache
         uses: actions/cache@v4
         with:
           path: price_cache.db
@@ -74,40 +83,30 @@ jobs:
           restore-keys: |
             price-cache-${{ runner.os }}-
 
-      - name: Get week number (for cache key rotation)
-        id: week
-        run: echo "week=$(date -u +%V)" >> $GITHUB_OUTPUT
+      - name: Restore signals DB
+        uses: actions/cache@v4
+        with:
+          path: signals.db
+          key: signals-db-${{ runner.os }}-week${{ steps.week.outputs.week }}
+          restore-keys: |
+            signals-db-${{ runner.os }}-
 
-      # ── Determine mode ────────────────────────────────────────────
-      - name: Set mode
-        id: mode
+      - name: Update EOD data (all stocks)
         run: |
-          if [ -n "${{ github.event.inputs.mode }}" ]; then
-            echo "MODE=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event.schedule }}" = "30 2 * * 1-5" ] || \
-               [ "${{ github.event.schedule }}" = "0 7 * * 1-5" ]  || \
-               [ "${{ github.event.schedule }}" = "0 11 * * 1-5" ]; then
-            echo "MODE=daily" >> $GITHUB_OUTPUT
-          else
-            echo "MODE=halfhour" >> $GITHUB_OUTPUT
-          fi
+          echo "=== EOD UPDATE $(date -u '+%H:%M UTC') ==="
+          python data_updater.py --daily
 
-      # ── Run scanner ───────────────────────────────────────────────
-      - name: Run scanner
+      - name: Update sector indices
+        run: python data_updater.py --sectors || true   # non-fatal
+
+      - name: Run daily pattern scan
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
         run: |
-          MODE="${{ steps.mode.outputs.MODE }}"
-          FORCE=""
-          # Manual dispatch of halfhour: bypass market-hours guard
-          if [ "$MODE" = "halfhour" ] && [ -n "${{ github.event.inputs.mode }}" ]; then
-            FORCE="--force"
-          fi
-          python scanner.py --${MODE} --telegram $FORCE
+          echo "=== DAILY SCAN $(date -u '+%H:%M UTC') ==="
+          python scanner.py --daily --telegram
 
-      # ── Save price cache for next run ─────────────────────────────
-      # Always save after a successful run so the next run benefits.
       - name: Save price cache
         if: always()
         uses: actions/cache/save@v4
@@ -115,25 +114,199 @@ jobs:
           path: price_cache.db
           key: price-cache-${{ runner.os }}-${{ hashFiles('requirements.txt') }}-week${{ steps.week.outputs.week }}-${{ github.run_number }}
 
-      # ── Commit watchlist.json ─────────────────────────────────────
+      - name: Save signals DB
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: signals.db
+          key: signals-db-${{ runner.os }}-week${{ steps.week.outputs.week }}-${{ github.run_number }}
+
       - name: Commit watchlist
-        if: steps.mode.outputs.MODE == 'daily'
+        if: always()
         run: |
           git config user.name  "NSE Scanner Bot"
           git config user.email "scanner@noreply.github.com"
           git add watchlist.json || true
-          git diff --staged --quiet || git commit -m "watchlist: $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git diff --staged --quiet || \
+            git commit -m "watchlist: $(date -u '+%Y-%m-%d %H:%M') [daily]"
           git push || true
 
-      # ── Upload artifacts ──────────────────────────────────────────
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.mode.outputs.MODE }}-${{ github.run_number }}
+          name: daily-${{ github.run_number }}
           path: |
             output/
             logs/
             signals.db
             watchlist.json
           retention-days: 30
+          if-no-files-found: warn
+
+  # ════════════════════════════════════════════════════════════════════
+  # HALFHOUR — update intraday data, quick-scan watchlist + top 300
+  # Timeout 25 min: intraday update ~8 min, quick-scan ~10 min
+  # ════════════════════════════════════════════════════════════════════
+  halfhour:
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'halfhour') ||
+      (github.event_name == 'schedule' &&
+       github.event.schedule != '30 2 * * 1-5' &&
+       github.event.schedule != '0 7 * * 1-5'  &&
+       github.event.schedule != '0 11 * * 1-5')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Get week number
+        id: week
+        run: echo "week=$(date -u +%V)" >> $GITHUB_OUTPUT
+
+      - name: Restore price cache
+        uses: actions/cache@v4
+        with:
+          path: price_cache.db
+          key: price-cache-${{ runner.os }}-${{ hashFiles('requirements.txt') }}-week${{ steps.week.outputs.week }}
+          restore-keys: |
+            price-cache-${{ runner.os }}-
+
+      - name: Restore signals DB
+        uses: actions/cache@v4
+        with:
+          path: signals.db
+          key: signals-db-${{ runner.os }}-week${{ steps.week.outputs.week }}
+          restore-keys: |
+            signals-db-${{ runner.os }}-
+
+      - name: Update intraday data
+        run: |
+          echo "=== INTRADAY UPDATE $(date -u '+%H:%M UTC') ==="
+          python data_updater.py --intraday
+
+      - name: Run halfhour scan
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
+        run: |
+          echo "=== 30-MIN SCAN $(date -u '+%H:%M UTC') ==="
+          # Manual dispatch: --force bypasses the 09:15–15:31 market-hours guard
+          if [ -n "${{ github.event.inputs.mode }}" ]; then
+            python scanner.py --halfhour --telegram --force
+          else
+            python scanner.py --halfhour --telegram
+          fi
+
+      - name: Save price cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: price_cache.db
+          key: price-cache-${{ runner.os }}-${{ hashFiles('requirements.txt') }}-week${{ steps.week.outputs.week }}-${{ github.run_number }}
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: halfhour-${{ github.run_number }}
+          path: |
+            output/
+            logs/
+          retention-days: 14
+          if-no-files-found: warn
+
+  # ════════════════════════════════════════════════════════════════════
+  # TEST — 100 known-good stocks, sends TG so you can verify output
+  # ════════════════════════════════════════════════════════════════════
+  test:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'test'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Get week number
+        id: week
+        run: echo "week=$(date -u +%V)" >> $GITHUB_OUTPUT
+
+      - name: Restore price cache
+        uses: actions/cache@v4
+        with:
+          path: price_cache.db
+          key: price-cache-${{ runner.os }}-${{ hashFiles('requirements.txt') }}-week${{ steps.week.outputs.week }}
+          restore-keys: |
+            price-cache-${{ runner.os }}-
+
+      - name: Run test scan
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
+        run: |
+          echo "=== TEST $(date -u '+%H:%M UTC') ==="
+          python scanner.py --test --telegram
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-${{ github.run_number }}
+          path: output/
+          retention-days: 7
+          if-no-files-found: warn
+
+  # ════════════════════════════════════════════════════════════════════
+  # HEALTHCHECK — verifies yfinance, fundamentals, universe, DB, TG
+  # ════════════════════════════════════════════════════════════════════
+  healthcheck:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'healthcheck'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Healthcheck
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
+        run: python scanner.py --healthcheck
