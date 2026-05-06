@@ -484,9 +484,20 @@ def _cache_write(stock: str, df: pd.DataFrame, tf: str = "1d"):
 
 
 def _cache_meta(stock: str) -> dict:
-    """Return metadata for a cached stock."""
+    """Return metadata for a cached stock. Handles both old and new (stock,tf) schema."""
     try:
         con = _get_cache()
+        # New schema: PK is (stock, tf) — query specifically for '1d'
+        try:
+            row = con.execute(
+                "SELECT last_updated, bar_count FROM cache_meta WHERE stock=? AND tf='1d'",
+                (stock,)
+            ).fetchone()
+            if row:
+                return {"last_updated": row[0], "bar_count": row[1]}
+        except Exception:
+            pass
+        # Old schema: PK is stock only
         row = con.execute(
             "SELECT last_updated, bar_count FROM cache_meta WHERE stock=?",
             (stock,)
@@ -499,33 +510,59 @@ def _cache_meta(stock: str) -> dict:
 
 
 def _fund_cache_read(stock: str) -> dict | None:
-    """Read cached fundamentals (valid for today)."""
+    """Read cached fundamentals. Tries data_updater's fund_cache table first, then old schema."""
     try:
         con = _get_cache()
-        row = con.execute(
-            "SELECT fund_json, fund_updated FROM cache_meta WHERE stock=?",
-            (stock,)
-        ).fetchone()
-        if row and row[0] and row[1] == str(_today()):
-            return json.loads(row[0])
+        # New schema: data_updater stores in fund_cache(stock, fund_json, updated_date)
+        try:
+            row = con.execute(
+                "SELECT fund_json, updated_date FROM fund_cache WHERE stock=?",
+                (stock,)
+            ).fetchone()
+            if row and row[0] and row[1] == str(_today()):
+                return json.loads(row[0])
+        except Exception:
+            pass
+        # Old schema: stored in cache_meta.fund_json
+        try:
+            row = con.execute(
+                "SELECT fund_json, fund_updated FROM cache_meta WHERE stock=?",
+                (stock,)
+            ).fetchone()
+            if row and row[0] and row[1] == str(_today()):
+                return json.loads(row[0])
+        except Exception:
+            pass
     except Exception:
         pass
     return None
 
 
 def _fund_cache_write(stock: str, fund: dict):
-    """Cache fundamentals for today."""
+    """Cache fundamentals. Writes to fund_cache table (new schema) with old fallback."""
     try:
         con = _get_cache()
         with _cache_lock:
-            con.execute(
-                "INSERT OR REPLACE INTO cache_meta "
-                "(stock, last_updated, bar_count, fund_json, fund_updated) "
-                "VALUES (?, COALESCE((SELECT last_updated FROM cache_meta WHERE stock=?), ?), "
-                "        COALESCE((SELECT bar_count  FROM cache_meta WHERE stock=?), 0), ?, ?)",
-                (stock, stock, str(_today()), stock, json.dumps(fund), str(_today()))
-            )
-            con.commit()
+            # Try new fund_cache table first (data_updater schema)
+            try:
+                con.execute(
+                    "INSERT OR REPLACE INTO fund_cache (stock, fund_json, updated_date) "
+                    "VALUES (?, ?, ?)",
+                    (stock, json.dumps(fund), str(_today()))
+                )
+                con.commit()
+                return
+            except Exception:
+                pass
+            # Fallback: old cache_meta schema
+            try:
+                con.execute(
+                    "UPDATE cache_meta SET fund_json=?, fund_updated=? WHERE stock=?",
+                    (json.dumps(fund), str(_today()), stock)
+                )
+                con.commit()
+            except Exception as e:
+                log.debug(f"Fund cache write {stock}: {e}")
     except Exception as e:
         log.debug(f"Fund cache write {stock}: {e}")
 
@@ -899,19 +936,29 @@ def canslim_score(close, vol, fund, nc, nr):
 
 def recommend(status, score, mkt_up, aggression=2, rs_pct=None):
     """
-    FIX: respect market regime aggression (0=Bear,1=Cautious,2=Uptrend,3=Bull).
-    Bear (aggression=0): no BUY signals. RS filter applied for BUY-strong.
+    Signal recommendation. A pattern was ALREADY detected before calling this —
+    so we never fully suppress it. Worst case = WATCH.
+    aggression: 0=Bear, 1=Cautious, 2=Uptrend, 3=Bull
     """
-    bo = any(k in status for k in ["Breakout","Burst","Pivot","Pocket"])
-    if aggression == 0: return "WATCH — bear mkt" if score >= CS["buy_moderate"] else "AVOID"
+    bo = any(k in status for k in ["Breakout","Burst","Pivot","Pocket","Reclaim","ORB"])
     rs_ok = rs_pct is None or rs_pct >= MIN_RS_PERCENTILE
+
+    # Bear market: downgrade all BUYs to WATCH, never AVOID
+    if aggression == 0:
+        if bo: return "WATCH — bear mkt (breakout)"
+        return "WATCH — bear mkt"
+
     if bo and score >= CS["buy_strong"] and mkt_up and aggression >= 2 and rs_ok:
         return "BUY — strong"
     if bo and score >= CS["buy_moderate"] and aggression >= 1:
         return "BUY — moderate"
-    if not bo and score >= CS["buy_strong"]: return "WATCH — await breakout"
-    if score >= CS["buy_moderate"]: return "WATCH — mixed"
-    return "AVOID"
+    if bo:
+        return "WATCH — breakout setup"   # breakout detected but score/RS not quite there
+    if score >= CS["buy_strong"]:
+        return "WATCH — await breakout"
+    if score >= CS["buy_moderate"]:
+        return "WATCH — mixed"
+    return "WATCH — low score"            # pattern detected → always emit, never AVOID
 
 # ================================================================
 # TARGETS
@@ -1100,13 +1147,12 @@ def det_cup(c, v):
         r2 = 1 - np.sum((s[:rpi+1]-fit)**2)/np.sum((s[:rpi+1]-np.mean(s[:rpi+1]))**2)
         if cf[0] <= 0 or r2 < 0.50: return None
     except: return None
-    # FIX: Volume should DRY UP through middle of cup (O'Neil requirement)
     if v is not None and rpi > 5:
-        left_vol  = np.mean(v[:rpi//2+1])  if rpi//2 > 0 else v[0]
+        left_vol  = np.mean(v[:rpi//2+1]) if rpi//2 > 0 else v[0]
         mid_vol   = np.mean(v[rpi//4:3*rpi//4]) if rpi > 4 else v[rpi//2]
-        vol_dryup_cup = mid_vol < left_vol * 0.9   # mid-cup vol < 90% of early vol
+        vol_dryup_cup = mid_vol < left_vol * 0.9
     else:
-        vol_dryup_cup = True   # can't check, don't penalise
+        vol_dryup_cup = True
     vs = vsurge(v, n); bo = c[-1] >= pk*0.97 and (vs is not None and vs >= 1.2)
     quality_adj = round((r2-sym) * (1.1 if vol_dryup_cup else 0.85), 3)
     return dict(pattern="CupHandle", status="Breakout Ready" if bo else "Forming",
@@ -1138,24 +1184,15 @@ def det_vcp(c, v):
     depths = [ct[2] for ct in contractions]
     if not all(depths[i] <= depths[i-1]*0.85 for i in range(1,len(depths))): return None
     if contractions[-1][1] < n*0.5: return None
-
-    # FIX: Final contraction must be tight (< 8% depth) — real VCPs end very tight
     final_depth = depths[-1]
-    if final_depth > 0.08: return None   # last contraction too loose
-
-    # FIX: Final contraction must be short (< 15 bars) — tight time = institutional buying
-    final_start = contractions[-1][0]
-    final_end   = contractions[-1][1]
-    final_days  = final_end - final_start
+    if final_depth > 0.12: return None
+    final_days = contractions[-1][1] - contractions[-1][0]
     if final_days > 15: return None
-
-    # FIX: Volume must contract through the pattern (later contractions quieter)
     if v is not None:
         vol_in_ct = [np.mean(v[ct[0]:ct[1]+1]) for ct in contractions]
         vol_contracting = all(vol_in_ct[i] <= vol_in_ct[i-1]*1.1 for i in range(1,len(vol_in_ct)))
     else:
         vol_contracting = True
-
     pivot = float(np.max(c[highs])); vs = vsurge(v, n)
     bo = c[-1] >= pivot*0.98 and (vs is not None and vs >= 1.5)
     return dict(pattern="VCP", status="Breakout Ready" if bo else "Forming",
@@ -1323,64 +1360,46 @@ def det_fwedge(c, v):
                 m1=round(h_sl,4), m2=round(l_sl,4), m3=len(highs), m4=len(lows), m5=None)
 
 def det_momburst(c, v):
-    """Stockbee/Bonde exact scan: c/c1>1.04 AND v>v1 AND liquid.
-    Plus TI65 uptrend + 2LYNCH narrow-day pre-burst."""
+    """Stockbee/Bonde: gain>4% AND vol>yesterday AND liquid. TI65 + 2LYNCH narrow-day."""
     n = len(c)
     if n < 30 or v is None: return None
-    # Bonde primary: today gain > 4%
     if c[-2] <= 0: return None
     day_gain = (c[-1] - c[-2]) / c[-2]
     if day_gain < 0.04: return None
-    # Bonde: today volume > yesterday volume
     if v[-1] <= v[-2]: return None
-    # Liquidity gate: avg 20d turnover > MIN_LIQUIDITY_CR (₹15 Cr)
     if n >= 20:
         avg_to = np.mean(v[-20:]) * np.mean(c[-20:]) / 1e7
         if avg_to < MIN_LIQUIDITY_CR: return None
-    # FIX: Volume must also be above 50d average (not just yesterday)
-    # Bonde's advanced filter: institutional participation, not just a one-day spike
     if n >= 50:
         vol_ma50 = np.mean(v[-50:])
-        if v[-1] < vol_ma50 * 1.0: return None   # today vol must at least match average
-    # FIX: Stock must be within 30% of 52-week high (Minervishi rule N)
+        if v[-1] < vol_ma50 * 1.0: return None
     if n >= 50:
         hi52 = np.max(c[-min(252,n):])
         if hi52 > 0 and (hi52 - c[-1]) / hi52 > MAX_DIST_52WK_PCT: return None
-    # Must be in uptrend (above 50-MA)
     ma50 = np.mean(c[-min(50, n):])
-    if c[-1] < ma50: return None
-    # TI65: avg 7d / avg 65d > 1.0 (Stockbee trend intensity)
+    if c[-1] < ma50 * 0.95: return None
     ti65 = None
     if n >= 65:
         ti65 = np.mean(c[-7:]) / np.mean(c[-65:]) if np.mean(c[-65:]) > 0 else 0
         if ti65 < 1.0: return None
-    # 2LYNCH N: pre-burst day should be narrow or negative
     n_flag = 0
     if n >= 3 and c[-3] > 0:
         prev_range = abs(c[-2] - c[-3]) / c[-3]
         n_flag = 1 if prev_range < 0.02 else 0
-    # Vol surge vs yesterday (quality metric)
     vs_yest = round(float(v[-1] / v[-2]), 2) if v[-2] > 0 else 1.0
     vs_20d = vsurge(v, n)
     quality = round(day_gain * vs_yest, 4)
     return dict(
         pattern="MomBurst", status="Burst Active",
         quality=quality, bz=round(float(c[-1]), 2),
-        bottom=round(float(c[-2]), 2), last=round(float(c[-1]), 2),
-        vs=vs_20d,
-        m1=round(day_gain * 100, 2),   # today gain %
-        m2=round(vs_yest, 2),           # vol vs yesterday
-        m3=round(ti65, 3) if ti65 else None,  # TI65
-        m4=float(n_flag),               # narrow pre-burst day
+        bottom=round(float(c[-2]), 2), last=round(float(c[-1]), 2), vs=vs_20d,
+        m1=round(day_gain * 100, 2), m2=round(vs_yest, 2),
+        m3=round(ti65, 3) if ti65 else None, m4=float(n_flag),
         m5=round((c[-1]-c[-5])/c[-5]*100, 2) if n >= 5 and c[-5] > 0 else None,
     )
 
 def det_epivot(c, v, o=None, hi=None, lo=None):
-    """
-    Episodic Pivot with close-strength check (FIX: stock must HOLD the gap).
-    close_strength = (close - low) / (high - low) >= 0.65
-    If no High/Low data, falls back to close-only approximation.
-    """
+    """Episodic Pivot — must HOLD the gap (close strength >= 65%)."""
     n = len(c)
     if n<22: return None
     gap=((o[-1]-c[-2])/c[-2]) if o is not None and len(o)==n else ((c[-1]-c[-2])/c[-2])
@@ -1388,35 +1407,27 @@ def det_epivot(c, v, o=None, hi=None, lo=None):
     vs=vsurge(v,n)
     if vs is None or vs<3.0: return None
     if c[-1]<np.mean(c[-min(200,n):]): return None
-    # FIX: close strength — must close near high of the day (not fade the gap)
     if hi is not None and lo is not None and len(hi)==n and len(lo)==n:
         day_range = hi[-1] - lo[-1]
         cs = (c[-1] - lo[-1]) / day_range if day_range > 0 else 0.5
     else:
-        # Approximate: if close > open, strong day
         cs = 0.7 if (o is None or c[-1] >= o[-1]) else 0.3
-    if cs < 0.65: return None   # faded — not a real EP
+    if cs < 0.65: return None
     return dict(pattern="EpisodicPivot", status="Breakout Ready",
                 quality=round(gap * cs, 3), bz=round(float(c[-1]),2), bottom=round(float(c[-2]),2),
                 last=round(float(c[-1]),2), vs=vs,
                 m1=round(gap*100,2), m2=vs, m3=round(cs,2), m4=None, m5=None)
 
 def det_ppivot(c, v):
-    """
-    Pocket Pivot (Morales/Kacher) — tightened for Indian markets:
-    - Up 1%+ today
-    - Today vol > max down-day vol of last 10 sessions (by 1.3x)
-    - TI65 uptrend
-    - Volume above 50d average
-    """
+    """Pocket Pivot: Up 1%+, vol > max down-day vol of last 10 × 1.3, above 50MA."""
     n = len(c)
     if n < 15 or v is None or len(v) < 15: return None
     day_gain = (c[-1] - c[-2]) / c[-2] if c[-2] > 0 else 0
-    if day_gain < 0.01: return None                 # must be up 1%+ today
+    if day_gain < 0.01: return None
     max_dv = 0.0
     for i in range(2, min(12, n)):
         if c[-i] < c[-i-1]: max_dv = max(max_dv, v[-i])
-    if max_dv == 0 or v[-1] <= max_dv * 1.3: return None   # 1.3x threshold
+    if max_dv == 0 or v[-1] <= max_dv * 1.3: return None
     if c[-1] < np.mean(c[-min(50,n):]): return None
     ti = calc_ti65(c)
     if ti is not None and ti < 1.01: return None
@@ -1462,27 +1473,30 @@ def det_stage2bo(c, v):
                 m1=round((c[-1]/ma150-1)*100,2), m2=None, m3=None, m4=None, m5=None)
 
 DETECTORS = {
-    "CupHandle": (det_cup, [60,80,120,180,250]),
-    "VCP": (det_vcp, [60,80,120,180,250]),
-    "FlatBase": (det_fb, [40,60,80,120,180]),
-    "InvHS": (det_ihs, [60,80,120,180,250]),
-    "DoubleBottom": (det_dbot, [40,60,100,150,200]),
-    "AscTriangle": (det_asctri, [30,50,80,120,180]),
-    "BullFlag": (det_flag, [15,20,30,40,50,60]),
-    "FallingWedge": (det_fwedge, [30,50,80,120]),
-    "MomBurst": (det_momburst, [30,40,50]),
-    "EpisodicPivot": (det_epivot, [30]),
-    "PocketPivot": (det_ppivot, [30]),
-    "Anticipation": (det_anticipation, [30,50]),
-    "Stage2Breakout": (det_stage2bo, [180]),
+    "CupHandle":     (det_cup,          [60,80,120,180,250]),
+    "VCP":           (det_vcp,          [60,80,120,180,250]),
+    "FlatBase":      (det_fb,           [40,60,80,120,180]),
+    "InvHS":         (det_ihs,          [60,80,120,180,250]),
+    "DoubleBottom":  (det_dbot,         [40,60,100,150,200]),
+    "AscTriangle":   (det_asctri,       [30,50,80,120,180]),
+    "BullFlag":      (det_flag,         [15,20,30,40,50,60]),
+    "FallingWedge":  (det_fwedge,       [30,50,80,120]),
+    "MomBurst":      (det_momburst,     [30,40,50]),
+    "EpisodicPivot": (det_epivot,       [30]),
+    "PocketPivot":   (det_ppivot,       [30]),
+    "Anticipation":  (det_anticipation, [30,50]),
+    "Stage2Breakout":(det_stage2bo,     [180]),
 }
+
+# ================================================================
+# SCAN ONE STOCK
 
 # ================================================================
 # SCAN ONE STOCK
 # ================================================================
 def scan_stock(sym, nifty_d, ftd_active, market_trend,
                period=PERIOD_DAILY, detector_filter=None, aggression=2):
-    fund = dl_fund(sym)
+    fund = dl_fund_cached(sym)  # same-day cache — avoids Yahoo rate limits on 2139 stocks
     fund_ok = fund.get("_fund_ok", False)
     cc, cr = cap_class(fund.get("marketCap"))
     rows = []; patterns_found = set()
@@ -1546,7 +1560,8 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
 
         mkt_up = ftd_active or "Bull" in str(market_trend) or "Uptrend" in str(market_trend)
         rec = recommend(best["status"], cs, mkt_up, aggression=aggression, rs_pct=rs_pct)
-        if rec == "AVOID": continue
+        # Note: recommend() no longer returns AVOID for detected patterns (always WATCH minimum)
+        if not rec: continue
 
         patterns_found.add(pat)
         stop, t1, t2, t3, rr = calc_targets(best["pattern"], best["bz"],
@@ -1619,6 +1634,85 @@ def send_telegram_file(filepath, caption=""):
             log.error(f"Telegram file failed: {resp.status_code} {resp.text[:200]}")
     except Exception as e:
         log.error(f"Telegram file: {e}")
+
+# ================================================================
+# CSV OUTPUT — human-readable column names, separate BUY / WATCH
+# ================================================================
+_COL_LABELS = {
+    "stock":             "Stock",
+    "name":              "Company Name",
+    "sector":            "Sector",
+    "cap_class":         "Market Cap Class",
+    "cap_cr":            "Market Cap (₹Cr)",
+    "pattern":           "Pattern",
+    "timeframe":         "Timeframe",
+    "status":            "Status",
+    "cmp":               "CMP (₹)",
+    "breakout_zone":     "Breakout Zone (₹)",
+    "stop_loss":         "Stop Loss (₹)",
+    "target_1":          "Target 1 (₹)",
+    "target_2":          "Target 2 (₹)",
+    "target_3":          "Target 3 (₹)",
+    "risk_reward":       "Risk:Reward",
+    "vol_surge":         "Volume Surge (x)",
+    "rs_percentile":     "RS Percentile",
+    "dist_52wk_pct":     "% From 52Wk High",
+    "canslim_score":     "CANSLIM Score",
+    "data_completeness": "Checks Available",
+    "converging":        "Converging Patterns",
+    "leg":               "Leg / Stage",
+    "stage":             "Weinstein Stage",
+    "recommendation":    "Recommendation",
+    "quality":           "Pattern Quality",
+    "scan_date":         "Scan Date",
+    "scan_time":         "Scan Time",
+    "scan_mode":         "Mode",
+    "earnings_near":     "Earnings <14d",
+    "ftd_active":        "FTD Active",
+    "vol_dryup":         "Volume Dry-Up",
+    "notes":             "Notes",
+}
+
+_CSV_COLS = [
+    "stock","name","sector","cap_class","cap_cr",
+    "pattern","status","converging",
+    "cmp","breakout_zone","stop_loss",
+    "target_1","target_2","target_3","risk_reward",
+    "vol_surge","rs_percentile","dist_52wk_pct",
+    "canslim_score","data_completeness",
+    "leg","stage","recommendation",
+    "earnings_near","vol_dryup","notes",
+    "scan_date","scan_time",
+]
+
+def _prep_df(frame: pd.DataFrame) -> pd.DataFrame:
+    """Select CSV columns, rename to human-readable headers, round floats."""
+    if len(frame) == 0:
+        return pd.DataFrame(columns=[_COL_LABELS.get(c,c) for c in _CSV_COLS])
+    cols = [c for c in _CSV_COLS if c in frame.columns]
+    out  = frame[cols].copy()
+    out.columns = [_COL_LABELS.get(c,c) for c in cols]
+    for col in out.select_dtypes(include="float").columns:
+        out[col] = out[col].round(2)
+    return out.reset_index(drop=True)
+
+def _save_csvs(buys: pd.DataFrame, watches: pd.DataFrame,
+               base_dir: str, ts: str) -> tuple:
+    """
+    Write three CSVs:
+      scan_BUY_<date>_<time>.csv   — BUY signals, best first, readable columns
+      scan_WATCH_<date>_<time>.csv — WATCH signals, best first, readable columns
+    Returns (buy_path, watch_path).
+    """
+    today = str(_today())
+    buy_path   = os.path.join(base_dir, f"scan_BUY_{today}_{ts}.csv")
+    watch_path = os.path.join(base_dir, f"scan_WATCH_{today}_{ts}.csv")
+    # utf-8-sig = Excel opens ₹ correctly on Windows
+    _prep_df(buys).to_csv(buy_path,   index=False, encoding="utf-8-sig")
+    _prep_df(watches).to_csv(watch_path, index=False, encoding="utf-8-sig")
+    log.info(f"CSV BUY   ({len(buys):>4} rows) → {os.path.basename(buy_path)}")
+    log.info(f"CSV WATCH ({len(watches):>4} rows) → {os.path.basename(watch_path)}")
+    return buy_path, watch_path
 
 def fmt_daily(df, market_trend, ftd, regime_info=None):
     _ist_hm = _ist("%H:%M")
@@ -1946,12 +2040,28 @@ def main():
     mode.add_argument("--healthcheck", action="store_true")
     mode.add_argument("--test", action="store_true", help="10 stocks test")
     ap.add_argument("--telegram", action="store_true")
+    ap.add_argument("--force",    action="store_true",
+                    help="Force halfhour scan outside market hours (manual dispatch)")
     args = ap.parse_args()
 
     if args.healthcheck: sys.exit(0 if healthcheck() else 1)
     if args.dashboard: run_dashboard(); return
 
-    # Fetch Nifty — with cache fallback when yfinance crashes (ValueError on date parsing)
+    # ── Market-hours guard: halfhour only runs 09:15–15:31 IST ──────────────
+    if args.halfhour and not args.force:
+        now_ist = _now()
+        h, m = now_ist.hour, now_ist.minute
+        market_open  = (h, m) >= (9, 15)
+        market_close = (h, m) <= (15, 31)
+        if not (market_open and market_close):
+            log.info(f"HALFHOUR SKIPPED: outside market hours ({_ist()}). Use --force to override.")
+            csv_path = os.path.join(OUTPUT_DIR, f"halfhour_{_today()}_{_ist('%H%M')}.csv")
+            pd.DataFrame([{"status": f"skipped_outside_market_hours_{_ist()}"}]).to_csv(csv_path, index=False)
+            if TG_TOKEN and TG_CHAT:
+                send_telegram(f"<b>30-min {_ist()}</b>\n⏸ Skipped — outside market hours\nUse --force to run manually.")
+                send_telegram_file(csv_path, f"30-min {_ist()} | skipped (outside hours)")
+            sys.exit(0)
+
     nifty_d = None
     for sym in ["^NSEI", "NIFTY_IND_NS"]:
         try:
@@ -1996,34 +2106,36 @@ def main():
         log.info(f"=== 30-min scan {_ist()} ===")
         alerts, quick_df = halfhour_check(nifty_d)
         log.info(f"{len(alerts)} alerts | {time.time()-t0:.0f}s")
+
+        _hh_time = _ist("%H%M")
+        csv_path = os.path.join(OUTPUT_DIR, f"halfhour_{_today()}_{_hh_time}.csv")
+        mkt_str  = market_trend if nifty_d is not None else "Unknown"
+
+        # Build CSV — signals if any, else status row
+        if quick_df is None and alerts:
+            quick_df = pd.DataFrame(alerts)
+        if quick_df is not None and len(quick_df):
+            quick_df.to_csv(csv_path, index=False)
+            n_sig = len(quick_df)
+        else:
+            # 0 signals — always save a status CSV so artifact upload works
+            pd.DataFrame([{"status": "0 signals", "scan_time": _ist(),
+                           "market": mkt_str, "alerts": len(alerts)}]).to_csv(csv_path, index=False)
+            n_sig = 0
+
         if args.telegram:
-            # ── Text alert: only new (non-deduped) signals ────────────────────
             if alerts:
                 msg = fmt_halfhour(alerts[:20])
                 if msg: send_telegram(msg)
             else:
-                log.info("No new alerts this round (all deduped or no signals)")
+                send_telegram(f"<b>30-min {_ist()}</b>\n⚪ 0 signals | Market: {mkt_str}")
 
-            # ── CSV: always send when quick_df has data (regardless of dedup) ─
-            # quick_df = full scan results; alerts = subset not yet sent today
-            if quick_df is None and alerts:
-                quick_df = pd.DataFrame(alerts)  # fallback: use alert dicts
-            if quick_df is not None and len(quick_df):
-                _hh_time = _ist("%H%M")
-                csv_path = os.path.join(OUTPUT_DIR,
-                    f"halfhour_{_today()}_{_hh_time}.csv")
-                quick_df.to_csv(csv_path, index=False)
-                n_active = sum(1 for a in alerts
-                               if a.get("status") in ("BREAKOUT TRIGGERED","Burst Active"))
-                mkt_str = market_trend if nifty_d is not None else "?"
-                cap = (f"30-min {_ist()} | {len(quick_df)} signals | "
-                       f"{n_active} new alerts | Market: {mkt_str}")
-                send_telegram_file(csv_path, cap)
-                log.info(f"CSV sent: {csv_path}")
-            else:
-                log.info("No signals in quick_df — CSV skipped")
-        elif not alerts:
-            log.info("No new signals this round")
+            n_active = sum(1 for a in alerts
+                           if a.get("status") in ("BREAKOUT TRIGGERED","Burst Active"))
+            cap = (f"30-min {_ist()} | {n_sig} signals | "
+                   f"{n_active} active alerts | Market: {mkt_str}")
+            send_telegram_file(csv_path, cap)
+            log.info(f"CSV sent: {csv_path}")
         return
 
     # ---- DAILY / TEST MODE ----
@@ -2034,8 +2146,34 @@ def main():
 
     stocks = load_universe()
     if args.test:
-        stocks = ["RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS","ADANIENT.NS",
-                  "TATAMOTORS.NS","BAJFINANCE.NS","ICICIBANK.NS","SBIN.NS","LT.NS"]
+        stocks = [s + ".NS" for s in [
+            # Nifty 50 core (all verified active)
+            "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC","SBIN",
+            "BHARTIARTL","KOTAKBANK","LT","AXISBANK","BAJFINANCE","ASIANPAINT","MARUTI",
+            "SUNPHARMA","TITAN","WIPRO","ULTRACEMCO","BAJAJFINSV","NESTLEIND","POWERGRID",
+            "NTPC","TECHM","HCLTECH","JSWSTEEL","TATASTEEL","ADANIENT","ADANIPORTS",
+            "ONGC","COALINDIA","BRITANNIA","DIVISLAB","DRREDDY","EICHERMOT","GRASIM",
+            "HDFCLIFE","INDUSINDBK","M&M","SBILIFE","SHREECEM","TATACONSUM","CIPLA",
+            "APOLLOHOSP","BAJAJ-AUTO","BPCL","HAVELLS","HEROMOTOCO","LTIM","LUPIN",
+            # Nifty Next 50 / liquid mid-caps
+            "SIEMENS","TORNTPHARM","TRENT","IRCTC","LICI","ADANIGREEN",
+            "CANBK","BANKBARODA","FEDERALBNK","IDFCFIRSTB","INDIGO","IRFC","JSWENERGY",
+            "LICHSGFIN","MRF","NMDC","OBEROIRLTY","PAGEIND","PETRONET","PFC",
+            "POLYCAB","RECLTD","SAIL","SBICARD","TATAPOWER","TVSMOTOR","VBL",
+            "ZYDUSLIFE","ACC","AIAENG","ALKEM","AMBUJACEM","ASTRAL","AUBANK",
+            "AUROPHARMA","BALKRISIND","BANDHANBNK","BATAINDIA","BERGEPAINT","BIOCON",
+            "CHOLAFIN","CUMMINSIND","DEEPAKNTR","DIXON","DMART","ESCORTS","EXIDEIND",
+            "GAIL","GLAND","GODREJCP","GODREJPROP","HAL","HINDALCO","ICICIPRULI",
+            "IEX","IGL","INDHOTEL","INDUSTOWER","JKCEMENT","JUBLFOOD","KAJARIACER",
+            "KPITTECH","LALPATHLAB","MANAPPURAM","MAXHEALTH","MCX","MUTHOOTFIN",
+            "NAUKRI","NHPC","OFSS","PHOENIXLTD","PIDILITIND","PIIND","PRESTIGE",
+            "PVRINOX","RBLBANK","SRF","SUNTV","TATAELXSI","TATATECH",
+            "TIINDIA","UJJIVANSFB","UTIAMC","VEDL","VOLTAS","MARICO","MCDOWELL-N",
+            # Strong mid-caps known for pattern setups
+            "KIRLOSKEROIL","POLYCAB","DIXON","TRENT","DMART",
+        ]]
+        seen = set(); stocks = [s for s in stocks if not (s in seen or seen.add(s))]
+        log.info(f"Test mode: {len(stocks)} verified stocks")
 
     log.info(f"{len(stocks)} stocks to scan")
 
@@ -2072,7 +2210,23 @@ def main():
              f"fund_miss={fund_fails} | {len(all_rows)} signals")
 
     if not all_rows:
-        log.info("No signals."); con.close(); return
+        # Always save a status CSV and send Telegram — never silently exit
+        _csv_hm  = _ist("%H%M")
+        csv_path = os.path.join(OUTPUT_DIR, f"scan_{_today()}_{_csv_hm}.csv")
+        status_df = pd.DataFrame([{"status": "0 signals", "scan_date": str(_today()),
+                                    "scan_time": _ist(), "mode": scan_label,
+                                    "stocks_scanned": ok_count, "total_stocks": len(stocks),
+                                    "elapsed_min": round(elapsed/60,1)}])
+        status_df.to_csv(csv_path, index=False)
+        log.info(f"Status CSV → {csv_path}")
+        if args.telegram:
+            mkt_str = market_trend if nifty_d is not None else "Unknown"
+            msg = (f"<b>NSE {scan_label} — {_today()} {_ist()}</b>\n"
+                   f"⚠️ 0 signals from {ok_count}/{len(stocks)} stocks scanned\n"
+                   f"Market: {mkt_str} | Time: {elapsed/60:.1f}m")
+            send_telegram(msg)
+            send_telegram_file(csv_path, f"NSE {scan_label} {_today()} {_ist()} | 0 signals | {ok_count}/{len(stocks)} scanned")
+        con.close(); return
 
     raw = (pd.DataFrame(all_rows)
            .drop_duplicates(subset=["stock","pattern","timeframe"])
@@ -2132,10 +2286,13 @@ def main():
             (str(_today()), _ist("%H:%M"), scan_label,
              len(stocks), ok_count, len(df), len(buys), round(elapsed,1)))
 
-    # Save CSV
-    _csv_hm = _ist("%H%M"); csv_path = os.path.join(OUTPUT_DIR, f"scan_{_today()}_{_csv_hm}.csv")
-    df.to_csv(csv_path, index=False)
-    log.info(f"CSV saved → {csv_path}")
+    # ── Save outputs: BUY csv + WATCH csv (readable columns) + raw ALL csv ──
+    _ts = _ist("%H%M")
+    buy_path, watch_path = _save_csvs(buys, watches, OUTPUT_DIR, _ts)
+    # Raw full-data CSV (all columns — for programmatic use / DB import)
+    csv_all = os.path.join(OUTPUT_DIR, f"scan_ALL_{_today()}_{_ts}.csv")
+    df.to_csv(csv_all, index=False)
+    log.info(f"CSV ALL   ({len(df):>4} rows) → {os.path.basename(csv_all)}")
 
     log.info(f"\nBUY: {len(buys)} | WATCH: {len(watches)}")
     log.info(f"\n{df['pattern'].value_counts().to_string()}")
@@ -2154,14 +2311,16 @@ def main():
         print(buys[[c for c in cols if c in buys.columns]].head(20).to_string(index=False))
 
     if args.telegram:
-        # Send text alert
-        send_telegram(fmt_daily(df, market_trend, ftd_active))
-        # Send full CSV as file
         _cap_time = _ist("%H:%M")
-        caption = (f"NSE Scanner {_today()} {_cap_time} | "
-                   f"BUY: {len(buys)} | WATCH: {len(watches)} | "
-                   f"Total: {len(df)} signals | Market: {market_trend}")
-        send_telegram_file(csv_path, caption)
+        send_telegram(fmt_daily(df, market_trend, ftd_active, regime_info=regime_info))
+        # Send BUY csv (primary — Telegram delivers first)
+        buy_cap = (f"📈 NSE {scan_label} {_today()} {_cap_time} | "
+                   f"BUY: {len(buys)} | Market: {market_trend}")
+        send_telegram_file(buy_path, buy_cap)
+        # Send WATCH csv
+        watch_cap = (f"👀 NSE {scan_label} WATCH {_today()} {_cap_time} | "
+                     f"WATCH: {len(watches)} signals")
+        send_telegram_file(watch_path, watch_cap)
 
     con.close()
 
