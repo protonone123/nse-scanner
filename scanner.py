@@ -242,21 +242,27 @@ def db_query(con, sql, params=None):
 # WATCHLIST — persisted as JSON so GitHub Actions can commit it
 # ================================================================
 def load_watchlist():
+    """Load watchlist — 7-day window to prevent bloat (4545-item explosion)."""
     if os.path.exists(WL_PATH):
         try:
             with open(WL_PATH) as f:
                 data = json.load(f)
-            # Filter to today + last 30 days
-            cutoff = str(date.today() - timedelta(days=30))
+            cutoff = str(_today() - timedelta(days=7))  # FIX: was 30d → 4545 items
             return [w for w in data if w.get("added_date", "") >= cutoff]
         except Exception:
             pass
     return []
 
 def save_watchlist(items):
-    # Prune: keep only last 14 days and cap at 500 items
-    cutoff = str(_today() - timedelta(days=14))
+    """Save watchlist — prune to 7 days + cap 300 items per stock+pattern."""
+    cutoff = str(_today() - timedelta(days=7))   # FIX: was 14d
     items = [i for i in items if i.get("added_date","") >= cutoff]
+    # Dedup: keep only latest entry per stock+pattern pair
+    seen = {}
+    for item in sorted(items, key=lambda x: x.get("added_date",""), reverse=True):
+        key = f"{item.get('stock','')}_{item.get('pattern','')}"
+        seen.setdefault(key, item)
+    items = list(seen.values())[:500]   # hard cap 500
     with open(WL_PATH, "w") as f:
         json.dump(items, f, indent=2)
     log.info(f"Watchlist saved: {len(items)} items → {WL_PATH}")
@@ -717,8 +723,13 @@ def dl(sym, interval="1d", period=PERIOD_DAILY):
             msg = str(e)
             if "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
                 log.warning(f"401/Crumb on {sym} attempt {attempt+1} — reset session")
-                _reset_session()
-                time.sleep(5)
+                _reset_session(); time.sleep(8)
+            elif "429" in msg or "rate limit" in msg.lower() or "too many" in msg.lower():
+                wait = 15 * (attempt + 1)   # 15s → 30s → 45s
+                log.warning(f"RateLimit {sym} — wait {wait}s")
+                time.sleep(wait)
+            elif "delisted" in msg.lower() or "no price data" in msg.lower():
+                return None   # no retry on delisted
             elif attempt < DL_RETRIES - 1:
                 time.sleep(DL_BACKOFF * (attempt + 1))
     return None
@@ -1768,18 +1779,18 @@ def halfhour_check(nifty_d):
         ftd_active, _ = check_follow_through_day(nifty_d)
         market_trend = check_market_trend(nifty_d["Close"].values)
 
-    # Part A: watchlist check — cap to 200 most recent with valid breakout zones
+    # Part A: watchlist check — READ FROM CACHE ONLY (data_updater fetched already)
     _all_wl = load_watchlist()
-    # Only items with a breakout zone (skips bare WATCH entries with no target)
-    # Keep only items with actionable breakout zone. All of them — cache makes this fast.
     watchlist = [w for w in _all_wl if w.get("breakout_zone") and w.get("breakout_zone") > 0]
-    # Most recent first (so newest signals get checked even if list is large)
-    watchlist = sorted(watchlist, key=lambda w: w.get("added_date",""), reverse=True)
-    log.info(f"Watchlist: {len(watchlist)}/{len(_all_wl)} items with bz (all cached)")
+    watchlist = sorted(watchlist, key=lambda w: w.get("added_date",""), reverse=True)[:200]  # cap 200
+    log.info(f"Watchlist: {len(watchlist)}/{len(_all_wl)} items (capped 200, cache-only)")
     for item in watchlist:
         sym = item["stock"] + ".NS"
-        df = dl(sym, "1d", "5d")
-        if df is None: continue
+        # Read from cache — data_updater --intraday already refreshed this
+        df = read_cache(sym, "1d", limit=10)
+        if df is None or len(df) < 2:
+            df = read_cache(sym, "15m", limit=50)
+        if df is None or len(df) < 2: continue
         close = df["Close"].values.astype(float)
         vol = df["Volume"].values.astype(float) if "Volume" in df.columns else None
         cmp = round(float(close[-1]), 2)
@@ -1795,18 +1806,19 @@ def halfhour_check(nifty_d):
                            "status": status, "cmp": cmp, "bz": bz, "vs": alert_vs})
             mark_alert_sent(item["stock"], item.get("pattern",""), status)
 
-    # Part B: quick-scan top stocks for same-day signals (always runs)
-    # FIX: MomBurst before 1 PM = day hasn't confirmed the move yet (too many fades)
-    # After 1 PM IST: move is 3h old, much more likely to hold to close
+    # Part B: quick-scan QUICK_SIZE stocks for same-day signals
+    # MomBurst before 1 PM IST = unconfirmed move, high fade rate
     current_hour_ist = _now().hour
     if current_hour_ist < HALFHOUR_CONFIRM_HOUR:
         intraday_dets = INTRADAY_DETECTORS - {"MomBurst"}
-        log.info(f"Before {HALFHOUR_CONFIRM_HOUR}:00 IST — MomBurst suppressed (unconfirmed moves)")
+        log.info(f"Before {HALFHOUR_CONFIRM_HOUR}:00 IST — MomBurst suppressed")
     else:
         intraday_dets = INTRADAY_DETECTORS
-    log.info(f"Quick-scan {QUICK_SIZE} stocks for same-day signals...")
-    warm_cache(stocks, workers=MAX_WORKERS)  # incremental refresh for quick-scan stocks
+    # CRITICAL FIX: stocks defined BEFORE use (was UnboundLocalError — warm_cache before assignment)
     stocks = load_universe()[:QUICK_SIZE]
+    log.info(f"Quick-scan {len(stocks)} stocks (cache-read, no live download)...")
+    # NO warm_cache here — data_updater --intraday ran before scanner in yml
+    # warm_cache here = double download = rate limits
     quick_rows = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futs = {ex.submit(scan_stock, s, nifty_d, ftd_active, market_trend,
@@ -2038,7 +2050,8 @@ def main():
     mode.add_argument("--halfhour", action="store_true", help="30-min watchlist+quick scan")
     mode.add_argument("--dashboard", action="store_true", help="Flask web UI")
     mode.add_argument("--healthcheck", action="store_true")
-    mode.add_argument("--test", action="store_true", help="10 stocks test")
+    mode.add_argument("--test", action="store_true", help="100 stocks test")
+    mode.add_argument("--outcomes", action="store_true", help="Track forward returns on past signals")
     ap.add_argument("--telegram", action="store_true")
     ap.add_argument("--force",    action="store_true",
                     help="Force halfhour scan outside market hours (manual dispatch)")
@@ -2046,6 +2059,8 @@ def main():
 
     if args.healthcheck: sys.exit(0 if healthcheck() else 1)
     if args.dashboard: run_dashboard(); return
+    if args.outcomes:
+        con = get_db(); track_outcomes(con); print_outcome_summary(con); con.close(); return
 
     # ── Market-hours guard: halfhour only runs 09:15–15:31 IST ──────────────
     if args.halfhour and not args.force:
