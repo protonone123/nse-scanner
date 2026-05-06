@@ -73,7 +73,7 @@ def _now():  return datetime.now(_IST)
 def _today(): return _now().date()
 def _ist(fmt="%H:%M IST"): return _now().strftime(fmt)
 
-MAX_WORKERS   = 10
+MAX_WORKERS   = 5    # FIX: was 10 — too aggressive, causes YFRateLimitError on CI
 DL_RETRIES    = 3
 DL_BACKOFF    = 3.0
 MARKET_OPEN   = (9, 15)    # IST
@@ -164,7 +164,11 @@ def dl(sym: str, interval: str = "1d", period: str = "1y") -> pd.DataFrame | Non
             msg = str(e)
             if "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
                 log.warning(f"401 {sym} attempt {attempt+1} — reset session")
-                _reset_session(); time.sleep(5)
+                _reset_session(); time.sleep(8)
+            elif "429" in msg or "rate limit" in msg.lower() or "too many" in msg.lower():
+                wait = 15 * (attempt + 1)  # 15s, 30s, 45s
+                log.warning(f"RateLimit {sym} attempt {attempt+1} — wait {wait}s")
+                time.sleep(wait)
             elif "delisted" in msg.lower() or "no price data" in msg.lower():
                 log.debug(f"Skip {sym} {interval}: delisted/no data")
                 return None  # don't retry delisted stocks
