@@ -3,24 +3,45 @@ name: NSE Live Scanner v4.2
 on:
   schedule:
     # ── DAILY FULL SCANS ──────────────────────────────────────────────────────
-    # 8:00 AM IST  = 02:30 UTC
-    - cron: "30 2 * * 1-5"
-    # 12:30 PM IST = 07:00 UTC
-    - cron: "0 7 * * 1-5"
-    # 4:30 PM IST  = 11:00 UTC
-    - cron: "0 11 * * 1-5"
+    # Adjusted 1h40m earlier to compensate GitHub Actions delay
 
-    # ── 45-MIN INTRADAY SCANS (was 30-min: 13 runs → now 7 runs) ─────────────
-    # Fewer runner spin-ups = less total download pressure = fewer rate limits
-    - cron: "45 3 * * 1-5"   # 09:15 IST ← market open
-    - cron: "30 4 * * 1-5"   # 10:00 IST
-    - cron: "15 5 * * 1-5"   # 10:45 IST
-    - cron: "0 6 * * 1-5"    # 11:30 IST
-    - cron: "45 6 * * 1-5"   # 12:15 IST
-    - cron: "30 7 * * 1-5"   # 1:00 IST
-    - cron: "15 8 * * 1-5"   # 1:45 IST
-    - cron: "0 9 * * 1-5"    # 2:30 IST
-    - cron: "45 9 * * 1-5"   # 3:15 IST ← near close
+    # Original 08:00 AM IST
+    - cron: "50 0 * * 1-5"
+
+    # Original 12:30 PM IST
+    - cron: "20 5 * * 1-5"
+
+    # Original 04:30 PM IST
+    - cron: "20 9 * * 1-5"
+
+    # ── INTRADAY SCANS ────────────────────────────────────────────────────────
+
+    # Original 09:15 IST ← market open
+    - cron: "5 2 * * 1-5"
+
+    # Original 10:00 IST
+    - cron: "50 2 * * 1-5"
+
+    # Original 10:45 IST
+    - cron: "35 3 * * 1-5"
+
+    # Original 11:30 IST
+    - cron: "20 4 * * 1-5"
+
+    # Original 12:15 IST
+    - cron: "5 5 * * 1-5"
+
+    # Original 1:00 IST
+    - cron: "50 5 * * 1-5"
+
+    # Original 1:45 IST
+    - cron: "35 6 * * 1-5"
+
+    # Original 2:30 IST
+    - cron: "20 7 * * 1-5"
+
+    # Original 3:15 IST ← near close
+    - cron: "5 8 * * 1-5"
 
   workflow_dispatch:
     inputs:
@@ -41,9 +62,10 @@ jobs:
   daily:
     if: |
       (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'daily') ||
-      github.event.schedule == '30 2 * * 1-5' ||
-      github.event.schedule == '0 7 * * 1-5'  ||
-      github.event.schedule == '0 11 * * 1-5'
+      github.event.schedule == '50 0 * * 1-5' ||
+      github.event.schedule == '20 5 * * 1-5' ||
+      github.event.schedule == '20 9 * * 1-5'
+
     runs-on: ubuntu-latest
     timeout-minutes: 55
 
@@ -96,7 +118,7 @@ jobs:
       - name: Run daily scan
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: python scanner.py --daily --telegram
 
       - name: Track signal outcomes
@@ -119,7 +141,7 @@ jobs:
       - name: Commit watchlist
         if: always()
         run: |
-          git config user.name  "NSE Scanner Bot"
+          git config user.name "NSE Scanner Bot"
           git config user.email "scanner@noreply.github.com"
           git add watchlist.json || true
           git diff --staged --quiet || \
@@ -142,13 +164,15 @@ jobs:
   # ════════════════════════════════════════════════════════════════════
   # HALFHOUR — intraday update then quick-scan watchlist + top 300
   # ════════════════════════════════════════════════════════════════════
+
   halfhour:
     if: |
       (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'halfhour') ||
       (github.event_name == 'schedule' &&
-       github.event.schedule != '30 2 * * 1-5' &&
-       github.event.schedule != '0 7 * * 1-5'  &&
-       github.event.schedule != '0 11 * * 1-5')
+       github.event.schedule != '50 0 * * 1-5' &&
+       github.event.schedule != '20 5 * * 1-5' &&
+       github.event.schedule != '20 9 * * 1-5')
+
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -197,7 +221,7 @@ jobs:
       - name: Run halfhour scan
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
           if [ -n "${{ github.event.inputs.mode }}" ]; then
             python scanner.py --halfhour --telegram --force
@@ -226,8 +250,10 @@ jobs:
   # ════════════════════════════════════════════════════════════════════
   # TEST — 100 stocks, sends Telegram so you can verify output
   # ════════════════════════════════════════════════════════════════════
+
   test:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'test'
+
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -263,7 +289,7 @@ jobs:
       - name: Run test scan (100 stocks + Telegram)
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: python scanner.py --test --telegram
 
       - name: Save price cache
@@ -283,12 +309,14 @@ jobs:
           if-no-files-found: warn
 
   # ════════════════════════════════════════════════════════════════════
-  # BOOTSTRAP — run once to fill price_cache.db with full history
+  # BOOTSTRAP
   # ════════════════════════════════════════════════════════════════════
+
   bootstrap:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'bootstrap'
+
     runs-on: ubuntu-latest
-    timeout-minutes: 90   # bootstrap is slow — full 10yr history
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
@@ -304,7 +332,6 @@ jobs:
         id: week
         run: echo "week=$(date -u +%V)" >> $GITHUB_OUTPUT
 
-      # Don't restore cache — bootstrap starts fresh
       - name: Bootstrap all stock history
         run: python data_updater.py --bootstrap
 
@@ -326,8 +353,10 @@ jobs:
   # ════════════════════════════════════════════════════════════════════
   # HEALTHCHECK
   # ════════════════════════════════════════════════════════════════════
+
   healthcheck:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'healthcheck'
+
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -344,5 +373,5 @@ jobs:
       - name: Healthcheck
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: python scanner.py --healthcheck
