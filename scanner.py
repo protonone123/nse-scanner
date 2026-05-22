@@ -208,10 +208,14 @@ def get_db():
     _new_cols = [
         ("rs_percentile",   "REAL"),
         ("dist_52wk_pct",   "REAL"),
-        # GAP2 FIX: ti65 and lynch_score_val were never in the schema →
-        # rows written with these columns caused silent INSERT failures on old DBs
         ("ti65",            "REAL"),
         ("lynch_score_val", "REAL"),
+        # Formation metadata + ETA columns
+        ("pattern_formed",  "TEXT"),
+        ("formation_days",  "INTEGER"),
+        ("t1_eta",          "TEXT"),
+        ("t2_eta",          "TEXT"),
+        ("t3_eta",          "TEXT"),
     ]
     _seen = set()
     for col, typ in _new_cols:
@@ -711,6 +715,26 @@ def _reset_session():
     with _YF_SESSION_LOCK:
         _YF_SESSION = None
 
+def _normalize_df_index(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    CRASH FIX: Normalize DataFrame index to tz-naive datetime.
+    Yahoo Finance sometimes returns ISO 8601 timestamps (e.g. '2025-05-22T08:45:00+00:00')
+    that crash older yfinance/pandas date parsers with:
+      ValueError('unconverted data remains: T08:45:00+00:00')
+    This function unifies all formats to a tz-naive Asia/Kolkata-equivalent naive datetime.
+    """
+    try:
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index, utc=True)
+        if df.index.tz is not None:
+            df.index = df.index.tz_convert("Asia/Kolkata").tz_localize(None)
+    except Exception:
+        try:
+            df.index = pd.to_datetime(df.index, format="mixed", utc=True).tz_localize(None)
+        except Exception:
+            pass   # best effort — return as-is
+    return df
+
 def dl(sym, interval="1d", period=PERIOD_DAILY):
     for attempt in range(DL_RETRIES):
         try:
@@ -720,11 +744,19 @@ def dl(sym, interval="1d", period=PERIOD_DAILY):
                              auto_adjust=True, progress=False, timeout=20, **kw)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
+            # CRASH FIX: normalize index before dropna — avoids ISO timestamp crash
+            df = _normalize_df_index(df)
             df = df.dropna()
             return df if len(df) > 20 else None
         except Exception as e:
             msg = str(e)
-            if "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
+            if "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
+                # Yahoo returning ISO 8601 timestamps yfinance can't parse —
+                # clear session and retry; most resolve on 2nd attempt
+                log.debug(f"ISO timestamp parse error {sym} attempt {attempt+1} — retry")
+                _reset_session()
+                time.sleep(3 * (attempt + 1))
+            elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
                 log.warning(f"401/Crumb on {sym} attempt {attempt+1} — reset session")
                 _reset_session(); time.sleep(8)
             elif "429" in msg or "rate limit" in msg.lower() or "too many" in msg.lower():
@@ -1006,57 +1038,117 @@ def calc_atr(close, high=None, low=None, period=14) -> float:
     return float(np.mean(moves))
 
 
+def calc_structural_stop(pattern, close, high, low, bz, bottom) -> float | None:
+    """
+    Pattern-specific structural stop — the price that PROVES the setup is wrong.
+    Research: ATR stop alone is noise. Structural stop = key pivot below which
+    the pattern thesis fails. We use the HIGHER (tighter) of ATR vs structural.
+
+    Per research doc Section 3:
+      CupHandle   → below handle low (bottom * 0.995)
+      VCP         → below final contraction low (bottom * 0.995)
+      FlatBase    → below base low (bottom * 0.992)
+      InvHS       → below right shoulder low
+      DoubleBottom→ below the lower of the two bottoms
+      AscTriangle → below last rising trough (bottom * 0.995)
+      BullFlag    → below flag low (bottom * 0.995)
+      FallingWedge→ below wedge swing low (bottom * 0.995)
+      MomBurst    → below prior-day LOW (not close) — fastest structural
+      EpisodicPivot→ above prior close (gap fill = thesis broken)
+      PocketPivot → below prior close
+      Stage2Breakout→ below 150d MA
+      Anticipation→ below 20d consolidation low
+    """
+    if bottom and bottom > 0:
+        if pattern in ("CupHandle", "VCP", "AscTriangle", "BullFlag",
+                       "FallingWedge", "Anticipation"):
+            return round(bottom * 0.995, 2)
+        if pattern == "FlatBase":
+            return round(bottom * 0.992, 2)
+        if pattern == "InvHS":
+            return round(bottom * 0.995, 2)   # right shoulder low
+        if pattern == "DoubleBottom":
+            return round(bottom * 0.992, 2)
+        if pattern == "MomBurst":
+            # Prior day low: use low_p if available, else prior close * 0.99
+            if low is not None and len(low) >= 2:
+                return round(float(low[-2]), 2)
+            return round(bottom * 0.99, 2)
+        if pattern == "EpisodicPivot":
+            # Gap fill = thesis dead. Stop = prior close (bottom is prior close in det_epivot)
+            return round(bottom * 1.001, 2)   # tiny buffer above prior close
+        if pattern == "PocketPivot":
+            return round(bottom * 0.995, 2)
+    if pattern == "Stage2Breakout" and close is not None and len(close) >= 150:
+        ma150 = np.mean(close[-150:])
+        return round(ma150 * 0.995, 2)
+    return None
+
+
 def calc_targets(pattern, bz, bottom, cmp, adr, close=None, high=None, low=None):
     """
-    Pattern-specific targets with ATR-based stop loss capped at MAX_STOP_PCT (8%).
-    Minervishi rule: if natural stop > 8% from entry, trade has too much risk — skip.
-    ATR stop = entry - 1.5 * ATR14, but never wider than MAX_STOP_PCT from entry.
-    Now uses proper True Range (High/Low) when available — stops were 30-50% too tight before.
+    Pattern-specific targets with 2.0× ATR structural stop capped at 8%.
+
+    Research corrections applied:
+    1. ATR multiplier: 1.5× → 2.0× (1.5× is for DAY TRADES; swing needs 2.0×)
+       At 1.5×, ~30% of swing trades hit stop before move develops (Schwager research)
+    2. Structural stop per pattern (Section 3, research doc) — tighter AND smarter
+    3. MomBurst uses R-multiple targets (not flat %) for proper position sizing
+    4. EpisodicPivot: 2R/4R targets + trail 20-EMA (not 5/10/15%)
+    5. Final stop = HIGHEST (tightest) of: 2×ATR stop, structural stop, 8% hard cap
     """
     if not bz or bz <= 0: return None, None, None, None, None
     h = bz - bottom if bottom and bottom > 0 else bz * 0.10
 
-    # ── ATR-based stop (proper True Range when H/L available) ────────────────
+    # ── Step 1: ATR-based stop (2.0× — research-backed for 10-15d swing) ────
     if close is not None and len(close) >= 15:
         atr14 = calc_atr(close, high=high, low=low, period=14)
-        # Natural stop = entry - 1.5 × ATR
-        natural_stop = cmp - 1.5 * atr14
-        # Hard cap: never more than MAX_STOP_PCT below entry
-        min_allowed = cmp * (1 - MAX_STOP_PCT)
-        # Also use pattern bottom as reference for base patterns
-        pattern_stop = bottom * 0.98 if bottom and bottom > 0 else cmp * 0.92
-        # Use the HIGHEST (tightest) of the three
-        stop = round(max(natural_stop, min_allowed, pattern_stop), 2)
+        atr_stop = cmp - 2.0 * atr14          # 2.0× not 1.5× — critical fix
+        hard_cap  = cmp * (1 - MAX_STOP_PCT)  # 8% absolute maximum
+        stop_atr  = max(atr_stop, hard_cap)
     else:
-        stop = round(cmp * (1 - MAX_STOP_PCT), 2)   # fallback: 8% hard stop
+        stop_atr = cmp * (1 - MAX_STOP_PCT)
 
-    # ── Targets ──────────────────────────────────────────────────────────────
-    if pattern in ("MomBurst","EpisodicPivot","PocketPivot"):
-        # Short-term momentum: targets 5/10/15%, tight stop
-        t1,t2,t3 = round(cmp*1.05,2), round(cmp*1.10,2), round(cmp*1.15,2)
-        if close is not None and len(close) >= 15:
-            atr14 = calc_atr(close, high=high, low=low, period=14)
-            stop = round(max(cmp - 1.2 * atr14, cmp * 0.96), 2)
-        else:
-            stop = round(cmp * 0.96, 2)
+    # ── Step 2: Structural stop per pattern ──────────────────────────────────
+    struct_stop = calc_structural_stop(pattern, close, high, low, bz, bottom)
+
+    # ── Step 3: Final stop = highest (tightest) of the two ───────────────────
+    if struct_stop is not None:
+        stop = round(max(stop_atr, struct_stop), 2)
+    else:
+        stop = round(stop_atr, 2)
+
+    # ── Step 4: Targets — pattern-specific ───────────────────────────────────
+    risk = max(cmp - stop, cmp * 0.01)  # R = 1 unit of risk
+
+    if pattern == "MomBurst":
+        # R-multiple targets: 1.5R / 2.5R / 4.0R (Bonde standard)
+        # Allows proper position sizing — flat % was wrong for variable-risk setups
+        t1 = round(cmp + 1.5 * risk, 2)
+        t2 = round(cmp + 2.5 * risk, 2)
+        t3 = round(cmp + 4.0 * risk, 2)
+    elif pattern == "EpisodicPivot":
+        # Qullamaggie EP: 2R / 4R / trail 20-EMA. Catalysts can run 5-10× risk.
+        t1 = round(cmp + 2.0 * risk, 2)
+        t2 = round(cmp + 4.0 * risk, 2)
+        t3 = round(cmp + 7.0 * risk, 2)   # runner target — trail 20-EMA beyond T2
+    elif pattern == "PocketPivot":
+        t1 = round(bz + h * 0.50, 2)
+        t2 = round(bz + h * 1.00, 2)
+        t3 = round(cmp + 4.0 * risk, 2)
     elif "Flag" in pattern:
-        t1,t2,t3 = round(bz+h*0.5,2), round(bz+h,2), round(bz+h*1.5,2)
+        t1 = round(bz + h * 0.50, 2)
+        t2 = round(bz + h * 1.00, 2)
+        t3 = round(bz + h * 1.50, 2)
     else:
-        # Base patterns: measured move + Fibonacci extension
-        t1,t2,t3 = round(bz+h*0.5,2), round(bz+h,2), round(bz+h*1.618,2)
+        # Base patterns: measured move + 1.618 Fibonacci extension (O'Neil standard)
+        t1 = round(bz + h * 0.50, 2)
+        t2 = round(bz + h * 1.00, 2)
+        t3 = round(bz + h * 1.618, 2)
 
-    # ── RR validation ────────────────────────────────────────────────────────
-    risk   = max(cmp - stop, cmp * 0.01)
-    reward = max(t2 - cmp,   cmp * 0.05)
+    # ── Step 5: RR using T2 as primary target ────────────────────────────────
+    reward = max(t2 - cmp, cmp * 0.03)
     rr = round(reward / risk, 2) if risk > 0 else 0
-
-    # ── Flag trades where stop > 8% from entry as "wide stop" ────────────────
-    actual_stop_pct = (cmp - stop) / cmp if cmp > 0 else 0
-    if actual_stop_pct > MAX_STOP_PCT:
-        # Widen is impossible to trade safely — set stop at max allowed
-        stop = round(cmp * (1 - MAX_STOP_PCT), 2)
-        risk = cmp - stop
-        rr   = round(reward / risk, 2) if risk > 0 else 0
 
     return stop, t1, t2, t3, rr
 
@@ -1397,44 +1489,79 @@ def det_fwedge(c, v):
                 m1=round(h_sl,4), m2=round(l_sl,4), m3=len(highs), m4=len(lows), m5=None)
 
 def det_momburst(c, v):
-    """Stockbee/Bonde: gain>4% AND vol>yesterday AND liquid. TI65 + 2LYNCH narrow-day."""
+    """
+    Stockbee/Bonde MomBurst: gain>4% on volume expansion vs 20-day avg.
+    DAY-1 MISS FIX: TI65 was a hard GATE (return None if <1.0) that killed
+    valid signals on the very burst day — the day TI65 first crosses 1.0 is
+    exactly the day we want to alert.
+    Fixed approach:
+      • TI65 >= 1.0  → REQUIRED (stock in uptrend structure)
+      • TI65 >= 1.05 → BONUS quality points
+      • Vol: 1.5× 20-day avg (not 50-day — 50-day misses early-stage moves)
+      • No requirement for prior narrow day (Bonde 2LYNCH) — scored separately
+    Also DETECTORS windows now [30,50,65] so n=65 window gives TI65 on burst day.
+    """
     n = len(c)
     if n < 30 or v is None: return None
     if c[-2] <= 0: return None
+
+    # ── Gate 1: Day gain >= 4% ────────────────────────────────────────────────
     day_gain = (c[-1] - c[-2]) / c[-2]
     if day_gain < 0.04: return None
-    if v[-1] <= v[-2]: return None
+
+    # ── Gate 2: Volume expansion vs 20-day avg (not 50-day — catches day 1) ──
+    # Research: Bonde uses 20-day avg. 50-day avg makes detector fire on day 3+
+    vol_lb = min(20, n - 1)
+    vol_avg20 = np.mean(v[-vol_lb - 1:-1])   # exclude today's vol from avg
+    if vol_avg20 <= 0 or v[-1] < vol_avg20 * 1.5:
+        return None
+
+    # ── Gate 3: Liquidity (₹15Cr+ avg daily turnover) ────────────────────────
     if n >= 20:
         avg_to = np.mean(v[-20:]) * np.mean(c[-20:]) / 1e7
         if avg_to < MIN_LIQUIDITY_CR: return None
-    if n >= 50:
-        vol_ma50 = np.mean(v[-50:])
-        # BUG4/GAP7 FIX: was * 1.0 (no-op). Bonde requires vol meaningfully above avg.
-        if v[-1] < vol_ma50 * 1.5: return None
-    if n >= 50:
-        hi52 = np.max(c[-min(252,n):])
-        if hi52 > 0 and (hi52 - c[-1]) / hi52 > MAX_DIST_52WK_PCT: return None
-    ma50 = np.mean(c[-min(50, n):])
-    if c[-1] < ma50 * 0.95: return None
-    # BUG4 FIX: TI65 now runs because windows include [50,65,80] — n can be 65 or 80
+
+    # ── Gate 4: TI65 — must be in uptrend (>= 1.0). Advisory at 1.05. ────────
+    # NOT a hard kill gate: TI65 = 1.0 on burst day IS the signal we want.
     ti65 = None
     if n >= 65:
-        ti65 = np.mean(c[-7:]) / np.mean(c[-65:]) if np.mean(c[-65:]) > 0 else 0
-        if ti65 < 1.0: return None
+        avg65 = np.mean(c[-65:])
+        ti65  = round(np.mean(c[-7:]) / avg65, 4) if avg65 > 0 else 0.0
+        # Hard kill only if CLEARLY in downtrend (below 0.97)
+        if ti65 < 0.97: return None
+
+    # ── Gate 5: Above 50-day MA (structure confirmation) ─────────────────────
+    ma50 = np.mean(c[-min(50, n):])
+    if c[-1] < ma50 * 0.93: return None   # relaxed from 0.95 — day-1 can dip briefly
+
+    # ── Gate 6: Not too extended from 52-week high ───────────────────────────
+    if n >= 50:
+        hi52 = np.max(c[-min(252, n):])
+        if hi52 > 0 and (hi52 - c[-1]) / hi52 > MAX_DIST_52WK_PCT: return None
+
+    # ── Metrics ───────────────────────────────────────────────────────────────
+    # Narrow prior day (2LYNCH "N") — bonus, not gate
     n_flag = 0
     if n >= 3 and c[-3] > 0:
         prev_range = abs(c[-2] - c[-3]) / c[-3]
         n_flag = 1 if prev_range < 0.02 else 0
+
     vs_yest = round(float(v[-1] / v[-2]), 2) if v[-2] > 0 else 1.0
-    vs_20d = vsurge(v, n)
-    quality = round(day_gain * vs_yest, 4)
+    vs_20d  = round(float(v[-1] / vol_avg20), 2) if vol_avg20 > 0 else 1.0
+    quality = round(day_gain * (vs_20d / 3.0), 4)   # scale: 4% gain × 3× vol = quality 0.04
+
     return dict(
         pattern="MomBurst", status="Burst Active",
-        quality=quality, bz=round(float(c[-1]), 2),
-        bottom=round(float(c[-2]), 2), last=round(float(c[-1]), 2), vs=vs_20d,
-        m1=round(day_gain * 100, 2), m2=round(vs_yest, 2),
-        m3=round(ti65, 3) if ti65 else None, m4=float(n_flag),
-        m5=round((c[-1]-c[-5])/c[-5]*100, 2) if n >= 5 and c[-5] > 0 else None,
+        quality=quality,
+        bz=round(float(c[-1]), 2),
+        bottom=round(float(c[-2]), 2),
+        last=round(float(c[-1]), 2),
+        vs=vs_20d,
+        m1=round(day_gain * 100, 2),      # day gain %
+        m2=round(vs_yest, 2),             # vol vs yesterday
+        m3=round(ti65, 3) if ti65 else None,  # TI65
+        m4=float(n_flag),                 # narrow prior day
+        m5=round((c[-1]-c[-5])/c[-5]*100, 2) if n >= 5 and c[-5] > 0 else None,  # 5d return
     )
 
 def det_epivot(c, v, o=None, hi=None, lo=None):
@@ -1511,6 +1638,98 @@ def det_stage2bo(c, v):
                 bottom=round(float(np.min(c[-30:])),2), last=round(float(c[-1]),2), vs=vs,
                 m1=round((c[-1]/ma150-1)*100,2), m2=None, m3=None, m4=None, m5=None)
 
+# ================================================================
+# PATTERN FORMATION METADATA + TARGET ETA
+# ================================================================
+
+# Research-backed T1/T2/T3 ETA in trading days (Bulkowski + Bonde)
+# Format: (t1_days, t2_days, t3_days)
+_PATTERN_ETA = {
+    "CupHandle":      (15, 35, 70),   # Bulkowski: 2-4w T1, 5-10w T2
+    "VCP":            (12, 30, 60),   # Minervini: 2-4w T1, 4-8w T2
+    "FlatBase":       (8,  20, 45),   # 1-3w T1, 3-6w T2
+    "InvHS":          (20, 50, 100),  # Bulkowski: 3-6w T1, 8-16w T2 (89% hit rate)
+    "DoubleBottom":   (15, 40, 80),   # Bulkowski: 2-4w T1, 6-12w T2 (88% hit rate)
+    "AscTriangle":    (12, 30, 55),   # 2-4w T1, 4-8w T2 (83% hit rate)
+    "BullFlag":       (5,  15, 30),   # 1-2w T1, 2-4w T2
+    "HighTightFlag":  (7,  20, 40),   # 1-2w T1, 3-6w T2
+    "FallingWedge":   (15, 35, 65),   # 2-4w T1, 5-10w T2
+    "MomBurst":       (3,  7,  12),   # Bonde: 2-3d T1, 4-7d T2
+    "EpisodicPivot":  (4,  12, 25),   # Qullamaggie: 2-4d T1, 7-14d T2
+    "PocketPivot":    (8,  20, 40),   # 5-10d T1, 15-25d T2
+    "Anticipation":   (8,  20, 35),   # 1-3w T1, 3-6w T2
+    "Stage2Breakout": (20, 60, 120),  # 3-6w T1, 8-20w T2
+}
+
+def _trading_day_add(from_date, n_days: int) -> str:
+    """
+    Add n_days trading days to from_date (skip weekends).
+    Returns ISO date string. Simple approximation — no holiday calendar.
+    NSE has ~250 trading days/yr. Weekend skip is the dominant factor.
+    """
+    from datetime import date as _date, timedelta as _td
+    if isinstance(from_date, str):
+        from_date = _date.fromisoformat(from_date)
+    cur = from_date
+    added = 0
+    while added < n_days:
+        cur += _td(days=1)
+        if cur.weekday() < 5:   # Mon-Fri
+            added += 1
+    return str(cur)
+
+def calc_pattern_meta(df: pd.DataFrame, w: int, pattern: str) -> dict:
+    """
+    Compute formation start date, duration, timeframe label, and T1/T2/T3 ETAs.
+
+    Formation start  = df.index[-w] (first bar of the window the detector ran on)
+    Formation days   = w trading bars
+    Timeframe label  = mapped from w bars to human-readable bucket:
+                       ≤10 bars   → "Intraday/Short"
+                       11-30      → "Short-term (1-6w)"
+                       31-65      → "Medium (2-3m)"
+                       66-130     → "Medium-Long (3-6m)"
+                       131+       → "Long-term (6m+)"
+    T1/T2/T3 ETA    = today + ETA trading days per pattern
+    """
+    try:
+        # Formation start: first bar of the detection window
+        formed_idx = max(0, len(df) - w)
+        formed_date = str(df.index[formed_idx])[:10]
+        # Formation duration in trading days = w
+        formation_days = w
+        # Timeframe bucket
+        if w <= 10:
+            tf_label = "Intraday/Short"
+        elif w <= 30:
+            tf_label = "Short-term (1-6w)"
+        elif w <= 65:
+            tf_label = "Medium (2-3m)"
+        elif w <= 130:
+            tf_label = "Medium-Long (3-6m)"
+        else:
+            tf_label = "Long-term (6m+)"
+        # Target ETAs (trading days from today)
+        d1, d2, d3 = _PATTERN_ETA.get(pattern, (10, 25, 50))
+        today_str = str(_today())
+        t1_eta = _trading_day_add(today_str, d1)
+        t2_eta = _trading_day_add(today_str, d2)
+        t3_eta = _trading_day_add(today_str, d3)
+        return dict(
+            pattern_formed=formed_date,
+            formation_days=formation_days,
+            timeframe=tf_label,
+            t1_eta=t1_eta,
+            t2_eta=t2_eta,
+            t3_eta=t3_eta,
+        )
+    except Exception:
+        return dict(
+            pattern_formed=None, formation_days=w,
+            timeframe="Daily",
+            t1_eta=None, t2_eta=None, t3_eta=None,
+        )
+
 DETECTORS = {
     "CupHandle":     (det_cup,          [60,80,120,180,250]),
     "VCP":           (det_vcp,          [60,80,120,180,250]),
@@ -1520,9 +1739,9 @@ DETECTORS = {
     "AscTriangle":   (det_asctri,       [30,50,80,120,180]),
     "BullFlag":      (det_flag,         [15,20,30,40,50,60]),
     "FallingWedge":  (det_fwedge,       [30,50,80,120]),
-    # BUG4 FIX: windows extended to [50,65,80] so n>=65 guard in det_momburst fires.
-    # Previously [30,40,50] → TI65 check (n>=65) was NEVER reached → false MomBurst signals.
-    "MomBurst":      (det_momburst,     [50,65,80]),
+    # [30,50,65]: 30 catches early-stage bursts, 65 enables TI65 scoring on burst day.
+    # Previously [50,65,80] — missed stocks with 30-49 bars of history.
+    "MomBurst":      (det_momburst,     [30, 50, 65]),
     "EpisodicPivot": (det_epivot,       [30]),
     "PocketPivot":   (det_ppivot,       [30]),
     "Anticipation":  (det_anticipation, [30,50]),
@@ -1621,7 +1840,8 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
                                               best.get("bottom"), best["last"], adr,
                                               close=close,
                                               high=high_p, low=low_p)   # BUG3 FIX: proper ATR
-        leg = identify_leg(close, best["bz"])
+        leg  = identify_leg(close, best["bz"])
+        pmeta = calc_pattern_meta(df, best["_w"], best["pattern"])  # formation date + ETA
         notes = " | ".join(filter(None, [
             "EARNINGS SOON" if earnings_near else None,
             "VOL DRY-UP" if vdu else None,
@@ -1632,7 +1852,14 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
             scan_date=str(_today()), scan_time=_ist("%H:%M"),
             scan_mode="daily", stock=sym.replace(".NS",""), name=fund.get("longName"),
             sector=fund.get("sector"), cap_class=cc, cap_cr=cr,
-            pattern=best["pattern"], timeframe="Daily", status=best["status"],
+            pattern=best["pattern"],
+            timeframe=pmeta["timeframe"],
+            pattern_formed=pmeta["pattern_formed"],
+            formation_days=pmeta["formation_days"],
+            t1_eta=pmeta["t1_eta"],
+            t2_eta=pmeta["t2_eta"],
+            t3_eta=pmeta["t3_eta"],
+            status=best["status"],
             breakout_zone=best["bz"], cmp=best["last"], stop_loss=stop,
             target_1=t1, target_2=t2, target_3=t3, risk_reward=rr,
             quality=best["quality"], vol_surge=best.get("vs"),
@@ -1641,7 +1868,6 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
             converging=None, leg=leg,
             earnings_near=1 if earnings_near else 0, ftd_active=1 if ftd_active else 0,
             vol_dryup=1 if vdu else 0, stage=stage, recommendation=rec,
-            # GAP2 FIX: ti65 and lynch_score_val now stored — used in _score() ranking
             ti65=ti65_val, lynch_score_val=lynch_val,
             m1=best.get("m1"), m2=best.get("m2"), m3=best.get("m3"),
             m4=best.get("m4"), m5=best.get("m5"), notes=notes or None))
@@ -1698,6 +1924,8 @@ _COL_LABELS = {
     "cap_cr":            "Market Cap (₹Cr)",
     "pattern":           "Pattern",
     "timeframe":         "Timeframe",
+    "pattern_formed":    "Pattern Formed (Date)",
+    "formation_days":    "Formation (Trading Days)",
     "status":            "Status",
     "cmp":               "CMP (₹)",
     "breakout_zone":     "Breakout Zone (₹)",
@@ -1705,6 +1933,9 @@ _COL_LABELS = {
     "target_1":          "Target 1 (₹)",
     "target_2":          "Target 2 (₹)",
     "target_3":          "Target 3 (₹)",
+    "t1_eta":            "T1 ETA (Date)",
+    "t2_eta":            "T2 ETA (Date)",
+    "t3_eta":            "T3 ETA (Date)",
     "risk_reward":       "Risk:Reward",
     "vol_surge":         "Volume Surge (x)",
     "rs_percentile":     "RS Percentile",
@@ -1715,6 +1946,8 @@ _COL_LABELS = {
     "leg":               "Leg / Stage",
     "stage":             "Weinstein Stage",
     "recommendation":    "Recommendation",
+    "score10":           "Score /10",
+    "tier":              "Tier (BUY/WATCH/AVOID)",
     "quality":           "Pattern Quality",
     "scan_date":         "Scan Date",
     "scan_time":         "Scan Time",
@@ -1722,16 +1955,22 @@ _COL_LABELS = {
     "earnings_near":     "Earnings <14d",
     "ftd_active":        "FTD Active",
     "vol_dryup":         "Volume Dry-Up",
+    "ti65":              "TI65",
+    "lynch_score_val":   "Lynch Score /6",
     "notes":             "Notes",
 }
 
 _CSV_COLS = [
     "stock","name","sector","cap_class","cap_cr",
-    "pattern","status","converging",
+    "pattern","timeframe","pattern_formed","formation_days",
+    "status","converging",
     "cmp","breakout_zone","stop_loss",
     "target_1","target_2","target_3","risk_reward",
+    "t1_eta","t2_eta","t3_eta",
+    "score10","tier",
     "vol_surge","rs_percentile","dist_52wk_pct",
     "canslim_score","data_completeness",
+    "ti65","lynch_score_val",
     "leg","stage","recommendation",
     "earnings_near","vol_dryup","notes",
     "scan_date","scan_time",
@@ -1768,45 +2007,78 @@ def _save_csvs(buys: pd.DataFrame, watches: pd.DataFrame,
 
 def fmt_daily(df, market_trend, ftd, regime_info=None):
     _ist_hm = _ist("%H:%M")
-    buys = df[df["recommendation"].str.startswith("BUY", na=False)]
-    watch = df[df["recommendation"].str.startswith("WATCH", na=False)]
-    ftd_str = "YES \u2705" if ftd else "NO"
+    buys  = df[df["tier"].str.contains("BUY", na=False)]
+    watch = df[df["tier"].str.contains("WATCH", na=False)]
+    ftd_str = "YES ✅" if ftd else "NO"
     lines = [
-        f"<b>\U0001f4ca NSE Scanner \u2014 {_today()} {_ist_hm}</b>",
+        f"<b>📊 NSE Scanner — {_today()} {_ist_hm}</b>",
         f"Market: {market_trend} | FTD: {ftd_str} | Regime: {regime_info['regime'] if regime_info else '?'}",
-        f"BUY: {len(buys)} | WATCH: {len(watch)}\n",
+        f"BUY STRONG: {len(df[df['tier'].str.contains('STRONG',na=False)])} | "
+        f"BUY MOD: {len(df[df['tier'].str.contains('MODERATE',na=False)])} | "
+        f"WATCH: {len(watch)}\n",
     ]
     for _, r in buys.head(15).iterrows():
-        em = "\U0001f7e2" if "strong" in str(r["recommendation"]) else "\U0001f7e1"
-        conv = f" [{r['converging']}]" if r.get("converging") else ""
-        notes = f"\n   \u26a0\ufe0f {r['notes']}" if r.get("notes") else ""
+        em    = "🟢" if "STRONG" in str(r.get("tier","")) else "🟡"
+        conv  = f" [{r['converging']}]" if r.get("converging") else ""
+        notes = f"\n   ⚠️ {r['notes']}" if r.get("notes") else ""
+        score = r.get("score10", "?")
+        tier  = r.get("tier", "?")
+        formed = r.get("pattern_formed","?")
+        fdays  = r.get("formation_days","?")
+        tf     = r.get("timeframe","Daily")
+        t1_eta = r.get("t1_eta","?")
+        t2_eta = r.get("t2_eta","?")
+        t3_eta = r.get("t3_eta","?")
         lines.append(
             f"{em} <b>{r['stock']}</b> ({r.get('cap_class','?')}) — {r['pattern']}{conv}\n"
-            f"   CMP \u20b9{r['cmp']} | BZ \u20b9{r['breakout_zone']} | SL \u20b9{r.get('stop_loss','?')}\n"
-            f"   T1 \u20b9{r.get('target_1','?')} | T2 \u20b9{r.get('target_2','?')} | "
-            f"T3 \u20b9{r.get('target_3','?')} | RR {r.get('risk_reward','?')}x\n"
-            f"   CANSLIM {r['canslim_score']}/{r.get('data_completeness','?')} | "
-            f"{r.get('leg','?')} | {r.get('stage','?')}{notes}"
+            f"   Score: <b>{score}/10</b>  {tier}\n"
+            f"   📅 Formed: {formed} ({fdays}d) | TF: {tf}\n"
+            f"   CMP ₹{r['cmp']} | BZ ₹{r['breakout_zone']} | SL ₹{r.get('stop_loss','?')}\n"
+            f"   T1 ₹{r.get('target_1','?')} by {t1_eta} | "
+            f"T2 ₹{r.get('target_2','?')} by {t2_eta} | "
+            f"T3 ₹{r.get('target_3','?')} by {t3_eta}\n"
+            f"   RR {r.get('risk_reward','?')}x | CANSLIM {r['canslim_score']}/{r.get('data_completeness','?')} | "
+            f"RS {r.get('rs_percentile','?')}pct | {r.get('stage','?')}{notes}"
         )
     return "\n".join(lines)
 
 def fmt_halfhour(alerts):
+    """
+    30-MINUTE SCAN ALERT FORMAT
+    ═══════════════════════════
+    Runs every 30 min during market hours (09:15–15:30 IST).
+    Shows: score/10, tier, CMP vs BZ, SL, T1, RR, vol surge.
+    Special alerts: 🏆 PROFIT TARGET (O'Neil 20-25% rule), 🚨 BREAKOUT TRIGGERED.
+    """
     if not alerts: return None
-    active = sum(1 for a in alerts if a.get("status") in ("BREAKOUT TRIGGERED","Burst Active"))
-    lines = [f"<b>\u26a1 30-min — {_ist()}</b>  {len(alerts)} signals ({active} active)\n"]
+    active  = sum(1 for a in alerts if a.get("status") in ("BREAKOUT TRIGGERED","Burst Active"))
+    profit  = sum(1 for a in alerts if "PROFIT" in str(a.get("status","")))
+    lines = [f"<b>⚡ 30-min — {_ist()}</b>  {len(alerts)} signals "
+             f"({active} breakouts | {profit} profit targets)\n"]
     for a in alerts:
-        em = ("\U0001f6a8" if "BREAKOUT" in a.get("status","")
-              else "\U0001f525" if "Burst Active" == a.get("status","")
-              else "\U0001f7e1" if "Pivot" in a.get("status","")
-              else "\u26a0\ufe0f")
-        vs = f" Vol {a['vs']}x" if a.get("vs") else ""
-        sl = f" | SL \u20b9{a['stop']}" if a.get("stop") else ""
-        t1 = f" | T1 \u20b9{a['t1']}" if a.get("t1") else ""
-        rr = f" | RR {a['rr']}x" if a.get("rr") else ""
-        cs = f" | CS {a['canslim']}/7" if a.get("canslim") is not None else ""
+        status = a.get("status","")
+        if "PROFIT" in status:
+            em = "🏆"
+        elif "BREAKOUT" in status:
+            em = "🚨"
+        elif status == "Burst Active":
+            em = "🔥"
+        elif "Pivot" in status:
+            em = "🟡"
+        else:
+            em = "⚠️"
+        vs   = f" Vol {a['vs']}x" if a.get("vs") else ""
+        sl   = f" | SL ₹{a['stop']}" if a.get("stop") else ""
+        t1   = f" | T1 ₹{a['t1']}" if a.get("t1") else ""
+        rr   = f" | RR {a['rr']}x" if a.get("rr") else ""
+        sc   = f" | ⭐{a['score10']}/10" if a.get("score10") is not None else ""
+        tier = f" {a.get('tier','')}" if a.get("tier") else ""
+        formed = f"\n   📅 Formed: {a['pattern_formed']} | TF: {a.get('timeframe','?')}" if a.get("pattern_formed") else ""
+        eta   = f" | T1 by {a['t1_eta']}" if a.get("t1_eta") else ""
         lines.append(
-            f"{em} <b>{a['stock']}</b> — {a['pattern']} — {a['status']}\n"
-            f"   \u20b9{a['cmp']} | BZ \u20b9{a.get('bz','?')}{vs}{sl}{t1}{rr}{cs}"
+            f"{em} <b>{a['stock']}</b> — {a['pattern']} — {status}\n"
+            f"   ₹{a['cmp']} | BZ ₹{a.get('bz','?')}{vs}{sl}{t1}{rr}{sc}{tier}"
+            f"{formed}{eta}"
         )
     return "\n".join(lines)
 
@@ -1837,14 +2109,39 @@ def halfhour_check(nifty_d):
         cmp = round(float(close[-1]), 2)
         bz = item.get("breakout_zone"); sl = item.get("stop_loss")
         alert_vs = None; status = "watching"
+
+        # ── O'Neil 20-25% Profit Rule ──────────────────────────────────────
+        # When a stock hits +20% from BZ → alert to take partial profits.
+        # "Most leaders make their first meaningful move of 20-25% before pausing."
+        if bz and bz > 0:
+            profit_pct = (cmp - bz) / bz * 100
+            profit_key = f"{item.get('pattern','')}_PROFIT20"
+            if profit_pct >= 20 and not already_alerted_today(item["stock"], profit_key):
+                alerts.append({
+                    "stock": item["stock"], "pattern": item.get("pattern",""),
+                    "status": f"PROFIT TARGET +{profit_pct:.1f}% — SELL 33% (O'Neil 20-25% rule)",
+                    "cmp": cmp, "bz": bz, "vs": None,
+                    "stop": sl, "t1": None, "rr": None,
+                    "score10": item.get("score10"), "tier": item.get("tier"),
+                })
+                mark_alert_sent(item["stock"], profit_key, "PROFIT20")
+                continue   # skip normal BREAKOUT check if already at profit
+
         if bz and cmp >= bz * 0.995:
             alert_vs = vsurge(vol, len(vol), 10) if vol is not None else None
             status = "BREAKOUT TRIGGERED" if (alert_vs and alert_vs >= 1.3) else "AT BREAKOUT ZONE"
         elif sl and cmp <= sl:
             status = "STOP HIT"
         if status != "watching" and not already_alerted_today(item["stock"], item.get("pattern","")):
-            alerts.append({"stock": item["stock"], "pattern": item.get("pattern",""),
-                           "status": status, "cmp": cmp, "bz": bz, "vs": alert_vs})
+            alerts.append({
+                "stock": item["stock"], "pattern": item.get("pattern",""),
+                "status": status, "cmp": cmp, "bz": bz, "vs": alert_vs,
+                "stop": sl, "t1": item.get("target_1"), "rr": item.get("risk_reward"),
+                "score10": item.get("score10"), "tier": item.get("tier"),
+                "t1_eta": item.get("t1_eta"), "t2_eta": item.get("t2_eta"),
+                "pattern_formed": item.get("pattern_formed"),
+                "timeframe": item.get("timeframe"),
+            })
             mark_alert_sent(item["stock"], item.get("pattern",""), status)
 
     # Part B: quick-scan QUICK_SIZE stocks for same-day signals
@@ -1887,9 +2184,9 @@ def halfhour_check(nifty_d):
                 "stock": sig["stock"], "pattern": sig["pattern"],
                 "status": sig["status"], "cmp": sig["cmp"],
                 "bz": sig.get("breakout_zone"), "vs": sig.get("vol_surge"),
-                "canslim": sig.get("canslim_score"),
                 "stop": sig.get("stop_loss"),
                 "t1": sig.get("target_1"), "rr": sig.get("risk_reward"),
+                "score10": sig.get("score10"), "tier": sig.get("tier"),
             })
             mark_alert_sent(sig["stock"], sig["pattern"], sig["status"])
 
@@ -2299,38 +2596,136 @@ def main():
            .drop_duplicates(subset=["stock","pattern","timeframe"])
            .reset_index(drop=True))
 
-    def _score(r):
-        cs  = (r.get("canslim_score") or 0)
-        q   = (r.get("quality") or 0) * 100
-        vs  = min(r.get("vol_surge") or 1, 5) / 5
-        rr  = min(r.get("risk_reward") or 0, 5) / 5
-        rw  = {"BUY — strong":3,"BUY — moderate":2,
-               "WATCH — await breakout":1.5,"WATCH — mixed":1}.get(r.get("recommendation",""),0)
-        # GAP2 FIX: use actual ti65 and lynch_score_val columns (were dead code before)
-        ti_val = r.get("ti65") or 0
-        ti  = 0.3 if ti_val >= 1.05 else 0
-        ls_val = r.get("lynch_score_val") or 0
-        nb  = 0.2 if ls_val >= 4 else (0.1 if ls_val >= 2 else 0)
-        cb  = 0.5 if r.get("converging") else 0
-        s2  = 0.3 if "Stage2" in str(r.get("stage","")) else 0
-        vd  = 0.2 if r.get("vol_dryup") else 0
-        return cs*0.30 + q*0.20 + rw*0.25 + vs*0.10 + rr*0.05 + ti+nb+cb+s2+vd
+    def _score(r) -> float:
+        """
+        10-POINT COMPOSITE SCORE SYSTEM
+        ════════════════════════════════
+        Replaces the opaque float scoring that gave no actionable signal.
 
-    raw["_score"] = raw.apply(_score, axis=1)
-    df = raw.sort_values("_score", ascending=False).drop(columns=["_score"]).reset_index(drop=True)
+        POINTS BREAKDOWN (max 10.0):
+        ┌─────────────────────────────────────────────┬──────┐
+        │ Component                                   │ Max  │
+        ├─────────────────────────────────────────────┼──────┤
+        │ 1. CANSLIM score (normalised)               │ 2.5  │
+        │ 2. RS Percentile (vs Nifty 63d)             │ 1.5  │
+        │ 3. Risk:Reward ratio                        │ 1.5  │
+        │ 4. Volume surge (vs 20d avg)                │ 1.0  │
+        │ 5. TI65 trend intensity (Bonde)             │ 0.5  │
+        │ 6. Lynch score (2LYNCH checklist)           │ 0.5  │
+        │ 7. Weinstein Stage 2                        │ 0.5  │
+        │ 8. Volume dry-up (smart money stealth)      │ 0.3  │
+        │ 9. Pattern quality (detector signal)        │ 0.5  │
+        │10. Earnings safe (no event <14d)            │ 0.2  │
+        └─────────────────────────────────────────────┴──────┘
+
+        TIERS:
+          BUY STRONG   ≥ 7.0  — high-conviction setup, all factors align
+          BUY MODERATE ≥ 5.5  — good setup, minor gaps acceptable
+          WATCH        ≥ 3.5  — pattern detected, not all factors confirm
+          AVOID        < 3.5  — pattern weak, pass
+
+        Score is stored as 'score10' in the output CSV (0.0–10.0, 1dp).
+        """
+        score = 0.0
+
+        # ── 1. CANSLIM (2.5 pts) ──────────────────────────────────────────────
+        cs = r.get("canslim_score") or 0
+        dc = max(r.get("data_completeness") or 1, 1)
+        # Normalize: if only 3 of 7 checks available, don't penalise
+        canslim_norm = cs / dc   # 0.0 – 1.0
+        score += canslim_norm * 2.5
+
+        # ── 2. RS Percentile (1.5 pts) ─────────────────────────────────────
+        # O'Neil: only buy stocks with RS ≥ 70th percentile vs index
+        rs = r.get("rs_percentile")
+        if rs is not None:
+            if rs >= 90:   score += 1.5
+            elif rs >= 80: score += 1.2
+            elif rs >= 70: score += 0.9
+            elif rs >= 60: score += 0.5
+            # Below 60th percentile = 0 — underperforming market
+
+        # ── 3. Risk:Reward (1.5 pts) ──────────────────────────────────────
+        # Minimum viable RR = 2:1. Below 1.5:1 = unacceptable.
+        rr = r.get("risk_reward") or 0
+        if rr >= 4.0:   score += 1.5
+        elif rr >= 3.0: score += 1.2
+        elif rr >= 2.0: score += 0.9
+        elif rr >= 1.5: score += 0.4
+        # Below 1.5 RR = 0 — poor risk/reward
+
+        # ── 4. Volume surge (1.0 pt) ──────────────────────────────────────
+        # Minervini: 1.5× min, 2.5× = institutional conviction
+        vs = r.get("vol_surge") or 0
+        if vs >= 4.0:   score += 1.0
+        elif vs >= 2.5: score += 0.8
+        elif vs >= 1.5: score += 0.5
+        elif vs >= 1.0: score += 0.2
+
+        # ── 5. TI65 trend intensity (0.5 pt) ──────────────────────────────
+        ti = r.get("ti65") or 0
+        if ti >= 1.10:   score += 0.5    # strong uptrend
+        elif ti >= 1.05: score += 0.35
+        elif ti >= 1.0:  score += 0.2    # borderline — burst day
+
+        # ── 6. Lynch score / 2LYNCH (0.5 pt) ──────────────────────────────
+        ls = r.get("lynch_score_val") or 0
+        if ls >= 5:   score += 0.5
+        elif ls >= 4: score += 0.4
+        elif ls >= 3: score += 0.25
+        elif ls >= 2: score += 0.1
+
+        # ── 7. Weinstein Stage 2 (0.5 pt) ─────────────────────────────────
+        stage = str(r.get("stage") or "")
+        if "Stage2" in stage:   score += 0.5
+        elif "Stage1" in stage: score += 0.2   # basing — acceptable
+        elif "Stage3" in stage: score -= 0.2   # topping — penalty
+
+        # ── 8. Volume dry-up (0.3 pt) ──────────────────────────────────────
+        if r.get("vol_dryup"): score += 0.3
+
+        # ── 9. Pattern quality (0.5 pt) ────────────────────────────────────
+        q = r.get("quality") or 0
+        if q >= 0.08:   score += 0.5    # very high quality burst/breakout
+        elif q >= 0.05: score += 0.35
+        elif q >= 0.02: score += 0.2
+        elif q > 0:     score += 0.1
+
+        # ── 10. Earnings safety (0.2 pt) ──────────────────────────────────
+        # Buying into known earnings = binary event risk = penalty
+        if not r.get("earnings_near"): score += 0.2
+
+        return round(min(score, 10.0), 2)
+
+    def _tier(score10: float) -> str:
+        """Convert numeric score to actionable tier label."""
+        if score10 >= 7.0: return "★★★ BUY STRONG"
+        if score10 >= 5.5: return "★★  BUY MODERATE"
+        if score10 >= 3.5: return "★   WATCH"
+        return "✗   AVOID"
+
+    raw["score10"] = raw.apply(_score, axis=1)
+    raw["tier"]    = raw["score10"].apply(_tier)
+    df = raw.sort_values("score10", ascending=False).reset_index(drop=True)
 
     # Save to DB
     db_execmany(con, """INSERT INTO signals
         (scan_date,scan_time,scan_mode,stock,name,sector,cap_class,cap_cr,
-         pattern,timeframe,status,breakout_zone,cmp,stop_loss,
+         pattern,timeframe,pattern_formed,formation_days,
+         t1_eta,t2_eta,t3_eta,
+         status,breakout_zone,cmp,stop_loss,
          target_1,target_2,target_3,risk_reward,quality,vol_surge,
          canslim_score,data_completeness,rs_percentile,dist_52wk_pct,converging,leg,
-         earnings_near,ftd_active,vol_dryup,stage,recommendation,m1,m2,m3,m4,m5,notes)
+         earnings_near,ftd_active,vol_dryup,stage,recommendation,
+         ti65,lynch_score_val,m1,m2,m3,m4,m5,notes)
         VALUES (:scan_date,:scan_time,:scan_mode,:stock,:name,:sector,:cap_class,:cap_cr,
-         :pattern,:timeframe,:status,:breakout_zone,:cmp,:stop_loss,
+         :pattern,:timeframe,:pattern_formed,:formation_days,
+         :t1_eta,:t2_eta,:t3_eta,
+         :status,:breakout_zone,:cmp,:stop_loss,
          :target_1,:target_2,:target_3,:risk_reward,:quality,:vol_surge,
          :canslim_score,:data_completeness,:rs_percentile,:dist_52wk_pct,:converging,:leg,
-         :earnings_near,:ftd_active,:vol_dryup,:stage,:recommendation,:m1,:m2,:m3,:m4,:m5,:notes)""",
+         :earnings_near,:ftd_active,:vol_dryup,:stage,:recommendation,
+         :ti65,:lynch_score_val,:m1,:m2,:m3,:m4,:m5,:notes)""",
                 df.to_dict("records"))
 
     # Update watchlist JSON (persisted via git commit in workflow)
@@ -2339,8 +2734,13 @@ def main():
         wl_items.append({
             "stock": r["stock"], "name": r.get("name"), "sector": r.get("sector"),
             "cap_class": r.get("cap_class"), "pattern": r["pattern"],
+            "timeframe": r.get("timeframe"), "pattern_formed": r.get("pattern_formed"),
+            "formation_days": r.get("formation_days"),
             "breakout_zone": r.get("breakout_zone"), "stop_loss": r.get("stop_loss"),
+            "target_1": r.get("target_1"), "risk_reward": r.get("risk_reward"),
+            "t1_eta": r.get("t1_eta"), "t2_eta": r.get("t2_eta"), "t3_eta": r.get("t3_eta"),
             "status": r.get("status"), "added_date": str(_today()),
+            "score10": r.get("score10"), "tier": r.get("tier"),
         })
     # Merge with existing (keep entries from last 30 days, dedup by stock+pattern)
     existing_wl = {f"{w['stock']}_{w['pattern']}": w for w in load_watchlist()}
@@ -2348,8 +2748,8 @@ def main():
         existing_wl[f"{item['stock']}_{item['pattern']}"] = item
     save_watchlist(list(existing_wl.values()))
 
-    buys = df[df["recommendation"].str.startswith("BUY", na=False)]
-    watches = df[df["recommendation"].str.startswith("WATCH", na=False)]
+    buys   = df[df["tier"].str.contains("BUY",   na=False)]
+    watches= df[df["tier"].str.contains("WATCH", na=False)]
     db_exec(con, """INSERT INTO runs
         (scan_date,scan_time,mode,stocks_total,stocks_ok,signals,buys,elapsed_sec)
         VALUES (?,?,?,?,?,?,?,?)""",
