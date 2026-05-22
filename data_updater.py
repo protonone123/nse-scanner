@@ -177,7 +177,11 @@ def dl(sym: str, interval: str = "1d", period: str = "1y") -> pd.DataFrame | Non
     return None
 
 def dl_since(sym: str, interval: str, since_date: str) -> pd.DataFrame | None:
-    """Download bars only since a given date. Uses yfinance start parameter."""
+    """Download bars only since a given date. Uses yfinance start parameter.
+    BUG7 FIX: was missing 429/rate-limit handling — a single 429 during incremental
+    update would silently return None, corrupting the cache for that stock.
+    Now mirrors the full retry/backoff logic from dl().
+    """
     for attempt in range(DL_RETRIES):
         try:
             sess = _get_session()
@@ -193,7 +197,12 @@ def dl_since(sym: str, interval: str, since_date: str) -> pd.DataFrame | None:
         except Exception as e:
             msg = str(e)
             if "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
-                _reset_session(); time.sleep(5)
+                log.warning(f"401 {sym} dl_since attempt {attempt+1} — reset session")
+                _reset_session(); time.sleep(8)
+            elif "429" in msg or "rate limit" in msg.lower() or "too many" in msg.lower():
+                wait = 15 * (attempt + 1)   # 15s, 30s, 45s — same as dl()
+                log.warning(f"RateLimit {sym} dl_since attempt {attempt+1} — wait {wait}s")
+                time.sleep(wait)
             elif "delisted" in msg.lower() or "no price data" in msg.lower():
                 log.debug(f"Skip {sym} {interval}: delisted/no data")
                 return None
@@ -712,14 +721,18 @@ def update_stock_eod(sym: str) -> dict:
 # ONE STOCK — update intraday timeframes
 # ================================================================
 def update_stock_intraday(sym: str) -> dict:
-    """Update 15m + 1h for one stock. Returns stats."""
+    """Update 15m + 1h for one stock. Returns stats.
+    GAP5 FIX: was using dl(sym, tf, '7d') even when we had a last_date →
+    redundantly re-downloading all 7d every 30min per stock.
+    Now uses dl_since() for incremental updates, matching the EOD updater pattern.
+    """
     result = {"sym": sym, "ok": 0, "skip": 0, "err": 0}
     for tf in TF_INTRADAY:
         try:
             last = get_last_date(sym, tf)
             if last:
-                # For intraday, use last 7d to be safe (handles weekends, gaps)
-                df = dl(sym, tf, "7d")
+                # Incremental: only fetch bars since last cached date
+                df = dl_since(sym, tf, last)
             else:
                 df = dl(sym, tf, HISTORY[tf])
 
@@ -851,7 +864,7 @@ def run_intraday_update(stocks: list[str]):
     t0 = time.time()
     ok = err = 0
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:  # 10 workers
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:  # MAX_WORKERS=5 (not 10 — rate-limit safe)
         futs = {ex.submit(update_stock_intraday, s): s for s in stocks}
         for fut in as_completed(futs):
             try:
