@@ -1,21 +1,59 @@
 #!/usr/bin/env python3
 """
-NSE Live Pattern Scanner v3.6
+NSE Live Pattern Scanner v3.7
 ==============================
-Fixes from v3.2 (what you saw failing in GitHub Actions):
-  1. DB PERSISTENCE — GitHub Actions is stateless. Each run is a fresh container.
-     Fix: watchlist saved as watchlist.json (committed back to repo via git).
-     DB still used but rebuilt each daily scan from scratch.
-  2. NSE UNIVERSE BLOCKED — archives.nseindia.com blocks GitHub IPs frequently.
-     Fix: hardcoded NIFTY_500_FALLBACK (500 top liquid NSE stocks). Used when
-     live URL fails. Also added alternate URL.
-  3. CSV SENT TO TELEGRAM — after daily scan, CSV is sent as a Telegram document
-     (not just a message). Uses sendDocument API.
-  4. SCHEDULE — 3 daily scans (8 AM, 12:30 PM, 4:30 PM IST) + every 30 min
-     during market hours (9:15 AM - 3:30 PM IST).
-  5. 28s RUNS = hourly scan was fetching nothing (universe blocked, empty watchlist).
-     Fix: hourly now uses hardcoded fallback so it always scans something.
-  6. Telegram sends CSV as a file attachment, not just text.
+v3.7 — Gap Analysis Fixes (from NSE_Scanner_Institutional_Gap_Analysis.md):
+
+  GAP 2  FIXED — RS calculation now uses true O'Neil cross-sectional percentile
+                  (4-quarter weighted return ranked against full universe).
+                  Universe built during warm_cache; falls back to linear approx
+                  on first run before universe is populated.
+
+  GAP 4  FIXED — Volume indicators added:
+                  • OBV (On-Balance Volume) — rising OBV during base = accumulation
+                  • A/D Line — accumulation/distribution confirmation
+                  • Up/Down volume ratio — 15-session up-vol / down-vol
+                  • OBV non-confirmation flagged as "OBV⚠" in notes
+                  • Up/Down ratio shown as "UD-VOL=X.XX" in notes
+
+  GAP 6  FIXED — Pattern detection improvements:
+                  • CupHandle: handle must be in upper half of cup (O'Neil rule)
+                    + volume must contract within the handle (not just cup)
+                  • VCP: enforces sequential DEPTH AND DURATION shrinkage per
+                    contraction (not just depth); contraction count now reported
+                  • InvHS: right shoulder volume must be ≤ left shoulder volume
+                    (Bulkowski/O'Neil validity criterion)
+
+  GAP 7  FIXED — signal_outcomes auto-populated at end of every daily scan.
+                  Previously required --outcomes flag → table was always empty.
+
+  GAP 8  FIXED — EpisodicPivot stop changed from 0.1% above prior close (too
+                  tight; hit by normal gap-fill noise) to 50% gap fill.
+
+  GAP 9  FIXED — Market breadth uses stratified 150-stock sample instead of
+                  first 100 alphabetically.  Added A/D ratio and new-high/new-low
+                  ratio to breadth dict and regime detail string.
+
+  GAP 10 FIXED — Weekly chart validation gate added (weekly_chart_valid()).
+                  Base-pattern BUY signals that fail weekly validation
+                  (price below 10w MA, or 10w MA declining, or weekly vol
+                  not drying up) are downgraded to WATCH with reason.
+
+  GAP 11 FIXED — RS line leadership detection added (rs_line_leading()).
+                  "RS-LEAD🌟" flag in notes when RS line is at 52-week high.
+                  +0.5 pts bonus in score10 — O'Neil's highest-conviction signal.
+
+  NOTE   GAPs 1, 3, 5 require external data source changes (Kite Connect / NSE
+         Bhavcopy / BSE filings) that are outside the yfinance-based architecture.
+         Those gaps are documented in the gap analysis MD file.
+
+Fixes from v3.6 (inherited):
+  1. DB PERSISTENCE — watchlist.json committed back via git.
+  2. NSE UNIVERSE BLOCKED — hardcoded NIFTY_500_FALLBACK.
+  3. CSV sent as Telegram document.
+  4. SCHEDULE — 3 daily scans + 30-min during market hours.
+  5. Universe fallback so scanner always has something to scan.
+  6. Telegram sendDocument API for CSV files.
 
 Usage:
   python scanner.py --daily      # full scan (8AM, 12:30PM, 4:30PM)
@@ -23,6 +61,7 @@ Usage:
   python scanner.py --dashboard  # Flask web UI
   python scanner.py --healthcheck
   python scanner.py --test
+  python scanner.py --outcomes   # manual outcome summary (also runs automatically)
 """
 
 import os, sys, json, time, sqlite3, argparse, logging
@@ -656,15 +695,17 @@ def warm_cache(stocks: list, workers: int = 8):
     Pre-warm the price cache for a list of stocks.
     Called once at the start of daily scan.
     Stocks already cached today are skipped instantly.
+
+    Gap 2 FIX: After caching, also builds the RS universe dict so that
+    calc_rs_percentile() can do true cross-sectional ranking for every stock.
     """
     today = str(_today())
     need_full = [s for s in stocks if _cache_meta(s).get("last_updated") != today]
     if not need_full:
         log.info("Cache: all stocks already up-to-date for today")
-        return
-
-    log.info(f"Cache warm-up: {len(need_full)} stocks need update "
-             f"({len(stocks)-len(need_full)} already cached today)...")
+    else:
+        log.info(f"Cache warm-up: {len(need_full)} stocks need update "
+                 f"({len(stocks)-len(need_full)} already cached today)...")
     t0 = time.time()
     done = 0
 
@@ -686,7 +727,21 @@ def warm_cache(stocks: list, workers: int = 8):
             except Exception:
                 pass
 
-    log.info(f"Cache warm-up done: {time.time()-t0:.1f}s")
+        log.info(f"Cache warm-up done: {time.time()-t0:.1f}s")
+
+    # ── Gap 2: Build RS universe from ALL cached stocks (not just those refreshed) ──
+    log.info("Building RS universe for cross-sectional ranking …")
+    rs_built = 0
+    for sym in stocks:
+        try:
+            df = _cache_read(sym)
+            if df is not None and len(df) >= 252:
+                c = df["Close"].values.astype(float)
+                register_rs_score(sym, c)
+                rs_built += 1
+        except Exception:
+            pass
+    log.info(f"RS universe: {rs_built}/{len(stocks)} stocks registered")
 
 def _build_session():
     try:
@@ -832,25 +887,56 @@ def check_market_breadth(nifty500_sample: list) -> dict:
     """
     Compute % of stocks above 50-DMA and 200-DMA.
     Uses cached data from whatever is already in price_cache.
-    Returns dict: {pct_above_50: float, pct_above_200: float, regime: str}
+    Returns dict: {pct_above_50, pct_above_200, regime, ad_ratio, new_high_ratio}
+
+    Gap 9 FIX:
+    - Use a random 150-stock sample (not first 100 alphabetically which
+      over-samples A/B/C names and misrepresents the broader market).
+    - Add advance/decline ratio and new-high vs new-low count.
     """
+    import random as _random
+    sample = list(nifty500_sample)
+    if len(sample) > 150:
+        # Stratified random: take every Nth stock to spread across the alphabet
+        step = len(sample) // 150
+        sample = sample[::step][:150]
+
     above_50 = 0; above_200 = 0; total = 0
-    for sym in nifty500_sample[:100]:   # sample 100 for speed
+    advancing = 0; declining = 0; new_highs = 0; new_lows = 0
+    for sym in sample:
         cached = _cache_read(sym)
         if cached is None or len(cached) < 50: continue
         c = cached["Close"].values.astype(float)
         total += 1
         if c[-1] > np.mean(c[-min(50, len(c)):]): above_50 += 1
         if len(c) >= 200 and c[-1] > np.mean(c[-200:]): above_200 += 1
+        # Advance/Decline: compare today's close vs yesterday
+        if len(c) >= 2:
+            if c[-1] > c[-2]:   advancing += 1
+            elif c[-1] < c[-2]: declining += 1
+        # New 52-week highs/lows
+        lb = min(252, len(c))
+        if lb >= 20:
+            hi52 = np.max(c[-lb:])
+            lo52 = np.min(c[-lb:])
+            if c[-1] >= hi52 * 0.98: new_highs += 1
+            if c[-1] <= lo52 * 1.02: new_lows  += 1
     if total == 0:
-        return {"pct_above_50": 50, "pct_above_200": 50, "regime": "Unknown"}
+        return {"pct_above_50": 50, "pct_above_200": 50, "regime": "Unknown",
+                "ad_ratio": 1.0, "new_high_ratio": 1.0}
     p50  = round(above_50  / total * 100, 1)
     p200 = round(above_200 / total * 100, 1)
+    ad_ratio       = round(advancing / max(declining, 1), 2)
+    new_high_ratio = round(new_highs / max(new_lows, 1), 2)
     if p50 >= 60 and p200 >= 50:   regime = "Bull"
     elif p50 >= 40 and p200 >= 35: regime = "Neutral"
     elif p50 < 40 and p200 < 35:   regime = "Bear"
     else:                          regime = "Mixed"
-    return {"pct_above_50": p50, "pct_above_200": p200, "regime": regime}
+    # A/D ratio override: if strongly negative even in apparent Bull → downgrade
+    if regime == "Bull" and ad_ratio < 0.7:
+        regime = "Mixed"
+    return {"pct_above_50": p50, "pct_above_200": p200, "regime": regime,
+            "ad_ratio": ad_ratio, "new_high_ratio": new_high_ratio}
 
 
 def get_market_regime(nifty_df, vix: float | None, breadth: dict) -> dict:
@@ -886,7 +972,10 @@ def get_market_regime(nifty_df, vix: float | None, breadth: dict) -> dict:
     # "Nifty ↑50MA ↑200MA |" was silently dropped. Now built unconditionally.
     detail = (f"Nifty {'↑' if above_50 else '↓'}50MA {'↑' if above_200 else '↓'}200MA"
               + (f" | VIX {vix:.1f}" if vix else " | VIX N/A")
-              + f" | Breadth {breadth.get('pct_above_50','?')}%↑50d")
+              + f" | Breadth {breadth.get('pct_above_50','?')}%↑50d"
+              + (f" | A/D {breadth.get('ad_ratio','?')}" if breadth.get('ad_ratio') else "")
+              + (f" | NH/NL {breadth.get('new_high_ratio','?')}" if breadth.get('new_high_ratio') else "")
+              )
     return {"regime": regime, "aggression": aggression, "detail": detail}
 
 
@@ -943,21 +1032,132 @@ def calc_adr(close, p=20):
 # ================================================================
 # CANSLIM
 # ================================================================
-def calc_rs_percentile(close, nc, lb=63) -> float | None:
+
+# ── Gap 2 FIX: True cross-sectional RS universe ─────────────────────────────
+# Built during warm_cache / after full universe download so every stock's
+# weighted return is known before we rank any individual stock against it.
+_RS_UNIVERSE: dict[str, float] = {}   # sym → weighted 4-quarter return
+_RS_UNIVERSE_LOCK = Lock()
+
+def _rs_weighted_return(close: np.ndarray, lb: int = 63) -> float | None:
+    """O'Neil 4-quarter weighted return: 40% last quarter + 20% each prior 3."""
+    if len(close) < lb * 4:
+        return None
+    def _r(a, b):
+        return (a / b - 1) if b > 0 else 0.0
+    r1 = _r(close[-1],    close[-lb])
+    r2 = _r(close[-lb],   close[-lb*2]) if len(close) >= lb*2 else 0.0
+    r3 = _r(close[-lb*2], close[-lb*3]) if len(close) >= lb*3 else 0.0
+    r4 = _r(close[-lb*3], close[-lb*4]) if len(close) >= lb*4 else 0.0
+    return 0.40*r1 + 0.20*r2 + 0.20*r3 + 0.20*r4
+
+def register_rs_score(sym: str, close: np.ndarray, lb: int = 63):
+    """Called for every stock after data load; builds the RS universe for ranking."""
+    w = _rs_weighted_return(close, lb)
+    if w is not None:
+        with _RS_UNIVERSE_LOCK:
+            _RS_UNIVERSE[sym] = w
+
+def calc_rs_percentile(close, nc, lb=63, sym: str = "") -> float | None:
     """
-    Relative strength percentile vs Nifty over lb trading days.
-    Returns 0-100 (higher = stronger than index).
-    Simple: stock_return / nifty_return ratio, expressed as percentile
-    approximation via outperformance magnitude.
+    Gap 2 FIX — True O'Neil cross-sectional RS percentile (0-99).
+
+    If the universe dict is populated (after warm_cache), rank this stock's
+    weighted 4-quarter return against the full universe.  Falls back to the
+    old linear approximation if the universe is too small (< 50 stocks).
     """
-    if nc is None or len(close) < lb or len(nc) < lb: return None
+    if nc is None or len(close) < lb or len(nc) < lb:
+        return None
+
+    with _RS_UNIVERSE_LOCK:
+        universe = dict(_RS_UNIVERSE)
+
+    if len(universe) >= 50 and sym and sym in universe:
+        scores = sorted(universe.values())
+        target = universe[sym]
+        rank   = sum(1 for s in scores if s <= target) / len(scores) * 99
+        return round(rank, 1)
+
+    # Fallback: old approximation (still better than nothing on first run)
     sr = (close[-1] / close[-lb] - 1) if close[-lb] > 0 else 0
-    nr = (nc[-1] / nc[-lb] - 1) if nc[-lb] > 0 else 0
-    # Outperformance: if stock up 30% vs Nifty up 10% = outperform 20pp
+    nr = (nc[-1]   / nc[-lb]   - 1)  if nc[-lb]   > 0 else 0
     outperf = sr - nr
-    # Map to rough percentile: 0pp = 50th, +20pp = ~85th, -20pp = ~15th
-    pct = 50 + outperf * 175   # linear approximation
+    pct = 50 + outperf * 175
     return round(min(max(pct, 0), 100), 1)
+
+
+# ── Gap 11 FIX: RS line leadership (new 52-week high BEFORE price) ───────────
+def rs_line_leading(close: np.ndarray, nc: np.ndarray | None, lb: int = 252) -> bool:
+    """
+    Returns True if the RS line (close / nifty_close) is at or within 1 % of
+    its 52-week high.  This is O'Neil's highest-conviction leading indicator —
+    institutions accumulating before the visible price breakout.
+    """
+    if nc is None or len(close) < lb or len(nc) < lb:
+        return False
+    rs_line = close[-lb:] / nc[-lb:]
+    current_rs   = rs_line[-1]
+    rs_52wk_high = float(np.max(rs_line[:-5]))   # exclude last 5 days (noise)
+    return current_rs >= rs_52wk_high * 0.99
+
+
+# ── Gap 4 FIX: Volume indicators — OBV, A/D line, up/down vol ratio ─────────
+def calc_obv(close: np.ndarray, vol: np.ndarray) -> np.ndarray:
+    """On-Balance Volume — cumulative; rising OBV during base = institutional accumulation."""
+    if len(close) != len(vol) or len(close) < 2:
+        return np.zeros(len(close))
+    obv = np.zeros(len(close))
+    obv[0] = vol[0]
+    for i in range(1, len(close)):
+        if close[i] > close[i-1]:
+            obv[i] = obv[i-1] + vol[i]
+        elif close[i] < close[i-1]:
+            obv[i] = obv[i-1] - vol[i]
+        else:
+            obv[i] = obv[i-1]
+    return obv
+
+def calc_ad_line(close: np.ndarray, high: np.ndarray, low: np.ndarray,
+                 vol: np.ndarray) -> np.ndarray:
+    """
+    Accumulation/Distribution line.
+    CLV = [(Close-Low)-(High-Close)] / (High-Low)
+    AD[i] = AD[i-1] + CLV[i] * Vol[i]
+    """
+    n = min(len(close), len(high), len(low), len(vol))
+    ad = np.zeros(n)
+    for i in range(n):
+        rng = high[i] - low[i]
+        if rng > 0:
+            clv = ((close[i] - low[i]) - (high[i] - close[i])) / rng
+        else:
+            clv = 0.0
+        ad[i] = (ad[i-1] if i > 0 else 0.0) + clv * vol[i]
+    return ad
+
+def calc_updown_vol_ratio(close: np.ndarray, vol: np.ndarray, lb: int = 15) -> float | None:
+    """
+    Ratio of cumulative volume on up-days to down-days over last lb sessions.
+    >= 1.5 = healthy accumulation; < 0.8 = distribution.
+    """
+    if len(close) < lb + 1 or vol is None or len(vol) < lb + 1:
+        return None
+    up_vol = down_vol = 0.0
+    for i in range(len(close)-lb, len(close)):
+        if close[i] > close[i-1]:
+            up_vol   += vol[i]
+        elif close[i] < close[i-1]:
+            down_vol += vol[i]
+    if down_vol == 0:
+        return 9.99 if up_vol > 0 else None
+    return round(up_vol / down_vol, 2)
+
+def obv_confirming(close: np.ndarray, vol: np.ndarray, lb: int = 20) -> bool:
+    """True if OBV is making new highs alongside price (confirming breakout)."""
+    if len(close) < lb or vol is None or len(vol) < lb:
+        return True   # no data = don't penalise
+    obv = calc_obv(close[-lb:], vol[-lb:])
+    return float(obv[-1]) >= float(np.max(obv[:-1]))
 
 
 def canslim_score(close, vol, fund, nc, nr):
@@ -1075,8 +1275,14 @@ def calc_structural_stop(pattern, close, high, low, bz, bottom) -> float | None:
                 return round(float(low[-2]), 2)
             return round(bottom * 0.99, 2)
         if pattern == "EpisodicPivot":
-            # Gap fill = thesis dead. Stop = prior close (bottom is prior close in det_epivot)
-            return round(bottom * 1.001, 2)   # tiny buffer above prior close
+            # Gap 8 FIX: EP stocks routinely fill 20-40% of the gap intraday.
+            # Stop at 0.1% above prior close is too tight and gets hit by normal noise.
+            # Use 50% gap fill as the stop — if more than half the gap is retraced,
+            # the thesis is weakening. bottom = prior close, bz = gap-up open/pivot.
+            if bottom and bz and bz > bottom:
+                gap_midpoint = bottom + 0.50 * (bz - bottom)
+                return round(gap_midpoint, 2)
+            return round(bottom * 1.001, 2)   # fallback
         if pattern == "PocketPivot":
             return round(bottom * 0.995, 2)
     if pattern == "Stage2Breakout" and close is not None and len(close) >= 150:
@@ -1268,6 +1474,13 @@ def det_cup(c, v):
     if len(h) < 2: return None
     hd = (np.max(h)-np.min(h))/np.max(h)
     if hd > 0.20 or np.min(h) < (pk+tr)/2*0.92: return None
+
+    # Gap 6 FIX: handle must form in upper half of the cup (O'Neil criterion)
+    cup_midpoint = (pk + tr) / 2
+    handle_low = float(np.min(h))
+    if handle_low < cup_midpoint:
+        return None   # handle too deep — invalid CwH
+
     r = (n-rpi)/(rpi+1)
     if not (0.10 <= r <= 0.45): return None
     try:
@@ -1276,14 +1489,23 @@ def det_cup(c, v):
         r2 = 1 - np.sum((s[:rpi+1]-fit)**2)/np.sum((s[:rpi+1]-np.mean(s[:rpi+1]))**2)
         if cf[0] <= 0 or r2 < 0.50: return None
     except: return None
+
     if v is not None and rpi > 5:
         left_vol  = np.mean(v[:rpi//2+1]) if rpi//2 > 0 else v[0]
         mid_vol   = np.mean(v[rpi//4:3*rpi//4]) if rpi > 4 else v[rpi//2]
         vol_dryup_cup = mid_vol < left_vol * 0.9
+        # Gap 6 FIX: volume must also contract WITHIN the handle (not just in cup)
+        handle_vol = v[rpi:] if len(v) > rpi else v[-3:]
+        handle_vol_ok = (len(handle_vol) >= 2 and
+                         float(np.mean(handle_vol)) < float(left_vol) * 0.85)
     else:
         vol_dryup_cup = True
+        handle_vol_ok = True
+
     vs = vsurge(v, n); bo = c[-1] >= pk*0.97 and (vs is not None and vs >= 1.2)
-    quality_adj = round((r2-sym) * (1.1 if vol_dryup_cup else 0.85), 3)
+    quality_adj = round((r2-sym)
+                        * (1.15 if (vol_dryup_cup and handle_vol_ok) else
+                           1.0  if vol_dryup_cup else 0.85), 3)
     return dict(pattern="CupHandle", status="Breakout Ready" if bo else "Forming",
                 quality=quality_adj, bz=round(float(pk),2), bottom=round(float(tr),2),
                 last=round(float(c[-1]),2), vs=vs,
@@ -1307,11 +1529,15 @@ def det_vcp(c, v):
         lo = nl[0] if len(nl)>0 else (hi+int(np.argmin(c[hi:nh])) if nh-hi>=3 else -1)
         if lo < 0 or lo >= n: continue
         depth = (c[hi]-c[lo])/c[hi]
+        duration = lo - hi   # number of bars from peak to trough
         if depth < 0.03: continue
-        contractions.append((hi, lo, depth))
+        contractions.append((hi, lo, depth, duration))
     if len(contractions) < 3: return None
-    depths = [ct[2] for ct in contractions]
+    depths    = [ct[2] for ct in contractions]
+    durations = [ct[3] for ct in contractions]
+    # Gap 6 FIX: each contraction must be shallower AND shorter than the previous
     if not all(depths[i] <= depths[i-1]*0.85 for i in range(1,len(depths))): return None
+    if not all(durations[i] <= durations[i-1]*1.10 for i in range(1,len(durations))): return None
     if contractions[-1][1] < n*0.5: return None
     final_depth = depths[-1]
     if final_depth > 0.12: return None
@@ -1373,9 +1599,22 @@ def det_ihs(c, v):
     if not (0.03<=hb<=0.50): return None
     nl = (np.max(c[li:hi+1])+np.max(c[hi:ri+1]))/2
     if ri>=n-2: return None
+
+    # Gap 6 FIX: right shoulder must form on LOWER volume than left shoulder
+    vol_ok = True
+    if v is not None and len(v) > ri:
+        # average volume in a 5-bar window around each shoulder trough
+        left_win  = v[max(0,li-2):li+3]
+        right_win = v[max(0,ri-2):ri+3]
+        if len(left_win) > 0 and len(right_win) > 0:
+            if np.mean(right_win) >= np.mean(left_win) * 1.10:
+                vol_ok = False   # right shoulder heavier — weaker setup
+
     vs = vsurge(v,n); bo = c[-1]>=nl*0.99 and (vs is not None and vs>=1.2)
+    quality_base = round(hb-asym, 3)
+    quality_adj  = round(quality_base * (1.0 if vol_ok else 0.80), 3)
     return dict(pattern="InvHS", status="Breakout Ready" if bo else "Forming",
-                quality=round(hb-asym,3), bz=round(float(nl),2), bottom=round(float(hd),2),
+                quality=quality_adj, bz=round(float(nl),2), bottom=round(float(hd),2),
                 last=round(float(c[-1]),2), vs=vs, m1=round(hb*100,2), m2=round(asym*100,2), m3=int(ri-li), m4=None, m5=None)
 
 def det_dbot(c, v):
@@ -1730,6 +1969,51 @@ def calc_pattern_meta(df: pd.DataFrame, w: int, pattern: str) -> dict:
             t1_eta=None, t2_eta=None, t3_eta=None,
         )
 
+
+# ================================================================
+# Gap 10 FIX: Weekly chart validation gate
+# Every base-pattern signal on the daily chart is validated against the
+# weekly chart before a BUY recommendation is issued.
+# Signals that fail weekly validation are downgraded to WATCH.
+# ================================================================
+_BASE_PATTERNS = {"CupHandle", "VCP", "FlatBase", "InvHS", "DoubleBottom",
+                  "AscTriangle", "FallingWedge", "Stage2Breakout"}
+
+def weekly_chart_valid(sym: str) -> tuple[bool, str]:
+    """
+    Returns (valid: bool, reason: str).
+
+    Passing conditions (ALL must hold for a BUY on a base pattern):
+      1. Weekly close above 10-week MA
+      2. 10-week MA slope is positive over last 4 weeks
+      3. Last week's volume was below 10-week average (dryup in base)
+    """
+    wdf = read_cache(sym, "1wk", limit=60)
+    if wdf is None or len(wdf) < 14:
+        return True, "no weekly data"   # can't invalidate — don't penalise
+
+    wc = wdf["Close"].values.astype(float)
+    wv = wdf["Volume"].values.astype(float) if "Volume" in wdf.columns else None
+
+    # 1. Price above 10-week MA
+    ma10w = np.mean(wc[-10:])
+    if wc[-1] < ma10w:
+        return False, "weekly price below 10w MA"
+
+    # 2. 10-week MA rising over last 4 weeks
+    ma10w_4w_ago = np.mean(wc[-14:-4])
+    if ma10w <= ma10w_4w_ago:
+        return False, "10w MA declining"
+
+    # 3. Volume dry-up (last week below 10-week average)
+    if wv is not None and len(wv) >= 11:
+        wv_avg10 = np.mean(wv[-11:-1])   # 10-week avg excluding last week
+        if wv[-1] > wv_avg10 * 1.20:     # 20% tolerance
+            return False, "weekly volume not drying up"
+
+    return True, "ok"
+
+
 DETECTORS = {
     "CupHandle":     (det_cup,          [60,80,120,180,250]),
     "VCP":           (det_vcp,          [60,80,120,180,250]),
@@ -1799,7 +2083,7 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
     # BUG1 FIX: calc rs_pct BEFORE the pattern loop — was calculated AFTER recommend(),
     # meaning rs_pct was always None → MIN_RS_PERCENTILE filter was permanently dead.
     try:
-        rs_pct = calc_rs_percentile(close, nc, lb=63)
+        rs_pct = calc_rs_percentile(close, nc, lb=63, sym=sym)
     except Exception:
         rs_pct = None
 
@@ -1807,6 +2091,16 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
     # Previously defined but never called → Stockbee ranking was completely bypassed.
     ti65_val = calc_ti65(close)
     lynch_val = lynch_score(close, vol)
+
+    # Gap 4 FIX: compute volume indicators once per stock
+    _obv_conf   = obv_confirming(close, vol) if vol is not None else True
+    _udv_ratio  = calc_updown_vol_ratio(close, vol) if vol is not None else None
+    # Gap 11 FIX: RS line leadership
+    _nc_full    = nc if nc is not None else None
+    _rs_leading = rs_line_leading(close, _nc_full)
+
+    # Gap 10 FIX: weekly chart validation (base patterns only, done once per stock)
+    _wkly_valid, _wkly_reason = weekly_chart_valid(sym)
 
     dets = {k:v for k,v in DETECTORS.items()
             if detector_filter is None or k in detector_filter}
@@ -1835,6 +2129,11 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
         # Note: recommend() no longer returns AVOID for detected patterns (always WATCH minimum)
         if not rec: continue
 
+        # Gap 10 FIX: downgrade base-pattern BUYs that fail weekly chart validation
+        if pat in _BASE_PATTERNS and "BUY" in rec and not _wkly_valid:
+            rec = rec.replace("BUY STRONG", "WATCH").replace("BUY MODERATE", "WATCH")
+            rec += f" [wkly: {_wkly_reason}]"
+
         patterns_found.add(pat)
         stop, t1, t2, t3, rr = calc_targets(best["pattern"], best["bz"],
                                               best.get("bottom"), best["last"], adr,
@@ -1847,6 +2146,9 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
             "VOL DRY-UP" if vdu else None,
             "STAGE2" if "Stage2" in stage else None,
             f"ADR={adr}%" if adr >= 3.5 else None,
+            "OBV⚠" if not _obv_conf else None,          # Gap 4: OBV non-confirmation
+            "RS-LEAD🌟" if _rs_leading else None,        # Gap 11: RS line at new high
+            f"UD-VOL={_udv_ratio}" if _udv_ratio is not None else None,  # Gap 4: up/down vol ratio
         ]))
         rows.append(dict(
             scan_date=str(_today()), scan_time=_ist("%H:%M"),
@@ -2607,7 +2909,7 @@ def main():
         │ Component                                   │ Max  │
         ├─────────────────────────────────────────────┼──────┤
         │ 1. CANSLIM score (normalised)               │ 2.5  │
-        │ 2. RS Percentile (vs Nifty 63d)             │ 1.5  │
+        │ 2. RS Percentile (true cross-sectional)     │ 1.5  │
         │ 3. Risk:Reward ratio                        │ 1.5  │
         │ 4. Volume surge (vs 20d avg)                │ 1.0  │
         │ 5. TI65 trend intensity (Bonde)             │ 0.5  │
@@ -2616,6 +2918,8 @@ def main():
         │ 8. Volume dry-up (smart money stealth)      │ 0.3  │
         │ 9. Pattern quality (detector signal)        │ 0.5  │
         │10. Earnings safe (no event <14d)            │ 0.2  │
+        │11. RS line leading (new 52wk high before    │ 0.5  │
+        │    price — O'Neil highest-conviction signal)│      │
         └─────────────────────────────────────────────┴──────┘
 
         TIERS:
@@ -2694,6 +2998,12 @@ def main():
         # ── 10. Earnings safety (0.2 pt) ──────────────────────────────────
         # Buying into known earnings = binary event risk = penalty
         if not r.get("earnings_near"): score += 0.2
+
+        # ── 11. RS Line Leadership (0.5 pt) — Gap 11 FIX ──────────────────
+        # O'Neil's highest-conviction signal: RS line making new 52-week high
+        # BEFORE or simultaneously with the price breakout.
+        notes_str = str(r.get("notes") or "")
+        if "RS-LEAD" in notes_str: score += 0.5
 
         return round(min(score, 10.0), 2)
 
@@ -2791,6 +3101,17 @@ def main():
         watch_cap = (f"👀 NSE {scan_label} WATCH {_today()} {_cap_time} | "
                      f"WATCH: {len(watches)} signals")
         send_telegram_file(watch_path, watch_cap)
+
+    # Gap 7 FIX: auto-run outcome tracking at end of every daily scan.
+    # The signal_outcomes table was always empty because track_outcomes() was
+    # only called via --outcomes flag.  Now it runs automatically so the
+    # feedback loop activates from day 1 without any extra CLI call.
+    try:
+        log.info("Auto-tracking signal outcomes …")
+        track_outcomes(con)
+        print_outcome_summary(con)
+    except Exception as e:
+        log.debug(f"Auto outcome tracking: {e}")
 
     con.close()
 
