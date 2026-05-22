@@ -206,9 +206,12 @@ def get_db():
     # ── Schema migration: add columns that may be missing from older DB ──────
     # SQLite does not support IF NOT EXISTS on ALTER TABLE — use try/except
     _new_cols = [
-        ("rs_percentile",  "REAL"),
-        ("dist_52wk_pct",  "REAL"),
-        ("rs_percentile",  "REAL"),   # duplicate safe — caught by except
+        ("rs_percentile",   "REAL"),
+        ("dist_52wk_pct",   "REAL"),
+        # GAP2 FIX: ti65 and lynch_score_val were never in the schema →
+        # rows written with these columns caused silent INSERT failures on old DBs
+        ("ti65",            "REAL"),
+        ("lynch_score_val", "REAL"),
     ]
     _seen = set()
     for col, typ in _new_cols:
@@ -268,29 +271,29 @@ def save_watchlist(items):
     log.info(f"Watchlist saved: {len(items)} items → {WL_PATH}")
 
 def already_alerted_today(stock, pattern):
-    path = os.path.join(OUTPUT_DIR, f"alerts_{_today()}.json")
-    if not os.path.exists(path):
-        return False
+    """BUG6 FIX: use alerts_sent DB (persisted via GH Actions cache), not ephemeral JSON file."""
     try:
-        with open(path) as f:
-            sent = json.load(f)
-        return any(a["stock"] == stock and a["pattern"] == pattern for a in sent)
+        con = get_db()
+        row = con.execute(
+            "SELECT id FROM alerts_sent WHERE scan_date=? AND stock=? AND pattern=?",
+            (str(_today()), stock, pattern)
+        ).fetchone()
+        return row is not None
     except Exception:
         return False
 
 def mark_alert_sent(stock, pattern, status):
-    path = os.path.join(OUTPUT_DIR, f"alerts_{_today()}.json")
-    sent = []
-    if os.path.exists(path):
-        try:
-            with open(path) as f:
-                sent = json.load(f)
-        except Exception:
-            pass
-    sent.append({"stock": stock, "pattern": pattern, "status": status,
-                 "time": _ist("%H:%M")})
-    with open(path, "w") as f:
-        json.dump(sent, f)
+    """BUG6 FIX: write to alerts_sent DB, not ephemeral JSON file."""
+    try:
+        con = get_db()
+        with _db_lock:
+            con.execute(
+                "INSERT OR IGNORE INTO alerts_sent (scan_date,stock,pattern,status) VALUES (?,?,?,?)",
+                (str(_today()), stock, pattern, status)
+            )
+            con.commit()
+    except Exception as e:
+        log.debug(f"mark_alert_sent {stock}: {e}")
 
 # ================================================================
 # DATA LAYER — with NSE fallback
@@ -847,9 +850,11 @@ def get_market_regime(nifty_df, vix: float | None, breadth: dict) -> dict:
 
     if vix_extreme: aggression = max(0, aggression - 1)
 
-    detail = (f"Nifty {'↑' if above_50 else '↓'}50MA "
-              f"{'↑' if above_200 else '↓'}200MA | "
-              f"VIX {vix:.1f}" if vix else "VIX N/A") +              f" | Breadth {breadth.get('pct_above_50','?')}%↑50d"
+    # GAP8 FIX: previous code had ternary on entire parenthesised expression — when vix=None,
+    # "Nifty ↑50MA ↑200MA |" was silently dropped. Now built unconditionally.
+    detail = (f"Nifty {'↑' if above_50 else '↓'}50MA {'↑' if above_200 else '↓'}200MA"
+              + (f" | VIX {vix:.1f}" if vix else " | VIX N/A")
+              + f" | Breadth {breadth.get('pct_above_50','?')}%↑50d")
     return {"regime": regime, "aggression": aggression, "detail": detail}
 
 
@@ -862,9 +867,13 @@ def check_follow_through_day(nifty_df):
     for i in range(low_idx + 1, len(c)):
         rally = rally + 1 if c[i] > c[i-1] else 0
     gain = (c[-1] - c[-2]) / c[-2] if c[-2] > 0 else 0
-    ftd = rally >= 4 and gain >= 0.015 and (v[-1] > v[-2] if len(v) >= 2 else False)
+    # BUG5 FIX: O'Neil FTD requires volume ABOVE 50-day avg, not just above yesterday
+    vol_avg50 = np.mean(v[-50:]) if len(v) >= 50 else np.mean(v)
+    ftd = (rally >= 4 and gain >= 0.015
+           and len(v) >= 2 and v[-1] > v[-2]
+           and v[-1] > vol_avg50)
     above_200 = c[-1] > np.mean(c[-min(200, len(c)):]) if len(c) >= 50 else False
-    return ftd or above_200, f"rally={rally} gain={gain:.2%}"
+    return ftd or above_200, f"rally={rally} gain={gain:.2%} vol_vs50avg={v[-1]/vol_avg50:.2f}x"
 
 def check_market_trend(nc):
     if nc is None or len(nc) < 200: return "Unknown"
@@ -974,25 +983,42 @@ def recommend(status, score, mkt_up, aggression=2, rs_pct=None):
 # ================================================================
 # TARGETS
 # ================================================================
-def calc_atr(close, period=14) -> float:
-    """Average True Range over period days (simplified — no High/Low, uses close-to-close)."""
-    if len(close) < period + 1: return close[-1] * 0.02
-    moves = np.abs(np.diff(close[-period-1:]))
+def calc_atr(close, high=None, low=None, period=14) -> float:
+    """
+    Average True Range over period days (Wilder ATR).
+    Uses True Range = max(H-L, |H-PrevC|, |L-PrevC|) when H/L available.
+    Falls back to close-to-close only if H/L absent (underestimates 30-50% on gapping NSE stocks).
+    """
+    if len(close) < period + 1:
+        return close[-1] * 0.02
+    if high is not None and low is not None and len(high) >= period + 1 and len(low) >= period + 1:
+        # True Range using last period+1 bars
+        h = high[-(period + 1):]
+        l = low[-(period + 1):]
+        c = close[-(period + 1):]
+        tr = [max(h[i] - l[i],
+                  abs(h[i] - c[i - 1]),
+                  abs(l[i] - c[i - 1]))
+              for i in range(1, len(c))]
+        return float(np.mean(tr))
+    # Fallback: close-to-close (underestimates on gap days — acceptable when H/L unavailable)
+    moves = np.abs(np.diff(close[-period - 1:]))
     return float(np.mean(moves))
 
 
-def calc_targets(pattern, bz, bottom, cmp, adr, close=None):
+def calc_targets(pattern, bz, bottom, cmp, adr, close=None, high=None, low=None):
     """
     Pattern-specific targets with ATR-based stop loss capped at MAX_STOP_PCT (8%).
     Minervishi rule: if natural stop > 8% from entry, trade has too much risk — skip.
     ATR stop = entry - 1.5 * ATR14, but never wider than MAX_STOP_PCT from entry.
+    Now uses proper True Range (High/Low) when available — stops were 30-50% too tight before.
     """
     if not bz or bz <= 0: return None, None, None, None, None
     h = bz - bottom if bottom and bottom > 0 else bz * 0.10
 
-    # ── ATR-based stop (better than flat %) ──────────────────────────────────
+    # ── ATR-based stop (proper True Range when H/L available) ────────────────
     if close is not None and len(close) >= 15:
-        atr14 = calc_atr(close, 14)
+        atr14 = calc_atr(close, high=high, low=low, period=14)
         # Natural stop = entry - 1.5 × ATR
         natural_stop = cmp - 1.5 * atr14
         # Hard cap: never more than MAX_STOP_PCT below entry
@@ -1009,7 +1035,7 @@ def calc_targets(pattern, bz, bottom, cmp, adr, close=None):
         # Short-term momentum: targets 5/10/15%, tight stop
         t1,t2,t3 = round(cmp*1.05,2), round(cmp*1.10,2), round(cmp*1.15,2)
         if close is not None and len(close) >= 15:
-            atr14 = calc_atr(close, 14)
+            atr14 = calc_atr(close, high=high, low=low, period=14)
             stop = round(max(cmp - 1.2 * atr14, cmp * 0.96), 2)
         else:
             stop = round(cmp * 0.96, 2)
@@ -1383,12 +1409,14 @@ def det_momburst(c, v):
         if avg_to < MIN_LIQUIDITY_CR: return None
     if n >= 50:
         vol_ma50 = np.mean(v[-50:])
-        if v[-1] < vol_ma50 * 1.0: return None
+        # BUG4/GAP7 FIX: was * 1.0 (no-op). Bonde requires vol meaningfully above avg.
+        if v[-1] < vol_ma50 * 1.5: return None
     if n >= 50:
         hi52 = np.max(c[-min(252,n):])
         if hi52 > 0 and (hi52 - c[-1]) / hi52 > MAX_DIST_52WK_PCT: return None
     ma50 = np.mean(c[-min(50, n):])
     if c[-1] < ma50 * 0.95: return None
+    # BUG4 FIX: TI65 now runs because windows include [50,65,80] — n can be 65 or 80
     ti65 = None
     if n >= 65:
         ti65 = np.mean(c[-7:]) / np.mean(c[-65:]) if np.mean(c[-65:]) > 0 else 0
@@ -1492,7 +1520,9 @@ DETECTORS = {
     "AscTriangle":   (det_asctri,       [30,50,80,120,180]),
     "BullFlag":      (det_flag,         [15,20,30,40,50,60]),
     "FallingWedge":  (det_fwedge,       [30,50,80,120]),
-    "MomBurst":      (det_momburst,     [30,40,50]),
+    # BUG4 FIX: windows extended to [50,65,80] so n>=65 guard in det_momburst fires.
+    # Previously [30,40,50] → TI65 check (n>=65) was NEVER reached → false MomBurst signals.
+    "MomBurst":      (det_momburst,     [50,65,80]),
     "EpisodicPivot": (det_epivot,       [30]),
     "PocketPivot":   (det_ppivot,       [30]),
     "Anticipation":  (det_anticipation, [30,50]),
@@ -1547,6 +1577,18 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
     earnings_near = check_earnings_near(fund)
     adr = calc_adr(close)
 
+    # BUG1 FIX: calc rs_pct BEFORE the pattern loop — was calculated AFTER recommend(),
+    # meaning rs_pct was always None → MIN_RS_PERCENTILE filter was permanently dead.
+    try:
+        rs_pct = calc_rs_percentile(close, nc, lb=63)
+    except Exception:
+        rs_pct = None
+
+    # GAP2 FIX: compute TI65 and Lynch score once per stock and wire into signal rows.
+    # Previously defined but never called → Stockbee ranking was completely bypassed.
+    ti65_val = calc_ti65(close)
+    lynch_val = lynch_score(close, vol)
+
     dets = {k:v for k,v in DETECTORS.items()
             if detector_filter is None or k in detector_filter}
 
@@ -1577,11 +1619,8 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
         patterns_found.add(pat)
         stop, t1, t2, t3, rr = calc_targets(best["pattern"], best["bz"],
                                               best.get("bottom"), best["last"], adr,
-                                              close=close)   # ATR stop uses full history
-        try:
-            rs_pct = calc_rs_percentile(close, nc, lb=63)
-        except Exception:
-            rs_pct = None
+                                              close=close,
+                                              high=high_p, low=low_p)   # BUG3 FIX: proper ATR
         leg = identify_leg(close, best["bz"])
         notes = " | ".join(filter(None, [
             "EARNINGS SOON" if earnings_near else None,
@@ -1602,6 +1641,8 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
             converging=None, leg=leg,
             earnings_near=1 if earnings_near else 0, ftd_active=1 if ftd_active else 0,
             vol_dryup=1 if vdu else 0, stage=stage, recommendation=rec,
+            # GAP2 FIX: ti65 and lynch_score_val now stored — used in _score() ranking
+            ti65=ti65_val, lynch_score_val=lynch_val,
             m1=best.get("m1"), m2=best.get("m2"), m3=best.get("m3"),
             m4=best.get("m4"), m5=best.get("m5"), notes=notes or None))
 
@@ -1976,17 +2017,22 @@ def track_outcomes(con):
     """
     Run daily to fill in forward returns for signals from 3/5/10/20 days ago.
     Builds the evidence base for knowing which detectors work on NSE.
+
+    BUG2 FIX: old code used INSERT OR REPLACE ... ON CONFLICT DO UPDATE with
+    excluded.price_Xd/excluded.return_Xd, but those columns were NOT in the
+    INSERT column list → SQLite 'no such column: excluded.price_Xd' on every call
+    → signal_outcomes table was ALWAYS empty → outcome tracking completely broken.
+    Fixed by: INSERT OR IGNORE (create row), then plain UPDATE (write lookback cols).
     """
     today = str(_today())
-    # Look for signals from 3,5,10,20 days ago that need price updates
     for lookback in [3, 5, 10, 20]:
-        target_date = str(_today() - timedelta(days=lookback + 2))  # approx trading day
+        target_date = str(_today() - timedelta(days=lookback + 2))
         signals = db_query(con,
             "SELECT id,stock,pattern,cmp,stop_loss,target_1,scan_date "
             "FROM signals WHERE scan_date=? AND recommendation LIKE 'BUY%'",
             (target_date,))
         if not signals: continue
-        col = f"price_{lookback}d"
+        col     = f"price_{lookback}d"
         ret_col = f"return_{lookback}d"
         for sig in signals:
             df = dl_cached(sig["stock"]+".NS", "7d")
@@ -1994,26 +2040,32 @@ def track_outcomes(con):
             current_price = float(df["Close"].values[-1])
             entry = sig.get("cmp") or 0
             if entry <= 0: continue
-            ret = round((current_price - entry) / entry * 100, 2)
+            ret      = round((current_price - entry) / entry * 100, 2)
             hit_t1   = 1 if (sig.get("target_1") and current_price >= sig["target_1"]) else 0
             hit_stop = 1 if (sig.get("stop_loss") and current_price <= sig["stop_loss"]) else 0
             try:
                 with _db_lock:
+                    # Step 1: create the base row if it doesn't exist yet
                     con.execute("""
-                        INSERT OR REPLACE INTO signal_outcomes
-                        (stock,pattern,signal_date,entry_price,stop_loss,target_1,
-                         tracked_date,hit_t1,hit_stop)
+                        INSERT OR IGNORE INTO signal_outcomes
+                        (stock, pattern, signal_date, entry_price,
+                         stop_loss, target_1, tracked_date, hit_t1, hit_stop)
                         VALUES (?,?,?,?,?,?,?,?,?)
-                        ON CONFLICT(stock,pattern,signal_date) DO UPDATE SET
-                        """ + f"{col}=excluded.{col}, {ret_col}=excluded.{ret_col},"
-                        + "hit_t1=excluded.hit_t1, hit_stop=excluded.hit_stop,"
-                          "tracked_date=excluded.tracked_date",
-                        (sig["stock"], sig["pattern"], sig["scan_date"],
-                         entry, sig.get("stop_loss"), sig.get("target_1"),
-                         today, hit_t1, hit_stop)
-                    )
+                    """, (sig["stock"], sig["pattern"], sig["scan_date"],
+                          entry, sig.get("stop_loss"), sig.get("target_1"),
+                          today, hit_t1, hit_stop))
+                    # Step 2: update the specific lookback price/return columns
+                    # Uses plain UPDATE — no excluded.* nonsense needed
+                    con.execute(f"""
+                        UPDATE signal_outcomes
+                        SET {col}=?, {ret_col}=?,
+                            hit_t1=?, hit_stop=?, tracked_date=?
+                        WHERE stock=? AND pattern=? AND signal_date=?
+                    """, (current_price, ret, hit_t1, hit_stop, today,
+                          sig["stock"], sig["pattern"], sig["scan_date"]))
                     con.commit()
-            except Exception: pass
+            except Exception as e:
+                log.debug(f"track_outcomes {sig['stock']}: {e}")
     log.info("Outcome tracking updated")
 
 
@@ -2254,9 +2306,12 @@ def main():
         rr  = min(r.get("risk_reward") or 0, 5) / 5
         rw  = {"BUY — strong":3,"BUY — moderate":2,
                "WATCH — await breakout":1.5,"WATCH — mixed":1}.get(r.get("recommendation",""),0)
-        ti  = 0.3 if (r.get("m3") or 0) >= 1.05 else 0   # TI65 bonus
-        nb  = 0.2 if (r.get("m4") or 0) >= 1.0 else 0    # narrow-day bonus
-        cb  = 0.5 if r.get("converging") else 0            # convergence bonus
+        # GAP2 FIX: use actual ti65 and lynch_score_val columns (were dead code before)
+        ti_val = r.get("ti65") or 0
+        ti  = 0.3 if ti_val >= 1.05 else 0
+        ls_val = r.get("lynch_score_val") or 0
+        nb  = 0.2 if ls_val >= 4 else (0.1 if ls_val >= 2 else 0)
+        cb  = 0.5 if r.get("converging") else 0
         s2  = 0.3 if "Stage2" in str(r.get("stage","")) else 0
         vd  = 0.2 if r.get("vol_dryup") else 0
         return cs*0.30 + q*0.20 + rw*0.25 + vs*0.10 + rr*0.05 + ti+nb+cb+s2+vd
