@@ -147,6 +147,20 @@ def _reset_session():
 # ================================================================
 # DOWNLOAD
 # ================================================================
+def _normalize_df_index(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize DataFrame index to tz-naive IST datetime. Fixes ValueError on ISO timestamps."""
+    try:
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index, utc=True)
+        if df.index.tz is not None:
+            df.index = df.index.tz_convert("Asia/Kolkata").tz_localize(None)
+    except Exception:
+        try:
+            df.index = pd.to_datetime(df.index, format="mixed", utc=True).tz_localize(None)
+        except Exception:
+            pass
+    return df
+
 def dl(sym: str, interval: str = "1d", period: str = "1y") -> pd.DataFrame | None:
     for attempt in range(DL_RETRIES):
         try:
@@ -158,11 +172,15 @@ def dl(sym: str, interval: str = "1d", period: str = "1y") -> pd.DataFrame | Non
                                  auto_adjust=True, progress=False, timeout=25, **kw)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
+            df = _normalize_df_index(df)   # CRASH FIX: handles ISO 8601 timestamps
             df = df.dropna()
             return df if len(df) > 0 else None
         except Exception as e:
             msg = str(e)
-            if "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
+            if "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
+                log.debug(f"ISO timestamp error {sym} attempt {attempt+1} — reset")
+                _reset_session(); time.sleep(3 * (attempt + 1))
+            elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
                 log.warning(f"401 {sym} attempt {attempt+1} — reset session")
                 _reset_session(); time.sleep(8)
             elif "429" in msg or "rate limit" in msg.lower() or "too many" in msg.lower():
@@ -192,11 +210,15 @@ def dl_since(sym: str, interval: str, since_date: str) -> pd.DataFrame | None:
                                  auto_adjust=True, progress=False, timeout=25, **kw)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
+            df = _normalize_df_index(df)   # CRASH FIX: ISO timestamp normalization
             df = df.dropna()
             return df if len(df) > 0 else None
         except Exception as e:
             msg = str(e)
-            if "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
+            if "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
+                log.debug(f"ISO timestamp error {sym} dl_since attempt {attempt+1}")
+                _reset_session(); time.sleep(3 * (attempt + 1))
+            elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
                 log.warning(f"401 {sym} dl_since attempt {attempt+1} — reset session")
                 _reset_session(); time.sleep(8)
             elif "429" in msg or "rate limit" in msg.lower() or "too many" in msg.lower():
