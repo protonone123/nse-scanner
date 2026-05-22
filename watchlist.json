@@ -17,8 +17,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.68,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.38,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "AUBANK",
@@ -38,8 +38,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.38,
-    "tier": "\u2605   WATCH"
+    "score10": 6.28,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "AARTIIND",
@@ -59,8 +59,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.78,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.38,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "BAJAJCON",
@@ -85,9 +85,9 @@
   },
   {
     "stock": "BSE",
-    "name": "BSE Limited",
-    "sector": "Financial Services",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -101,7 +101,7 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 6.88,
+    "score10": 6.47,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -122,7 +122,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.03,
+    "score10": 4.63,
     "tier": "\u2605   WATCH"
   },
   {
@@ -143,7 +143,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.73,
+    "score10": 4.33,
     "tier": "\u2605   WATCH"
   },
   {
@@ -164,7 +164,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.38,
+    "score10": 5.08,
     "tier": "\u2605   WATCH"
   },
   {
@@ -185,7 +185,7 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.03,
+    "score10": 4.63,
     "tier": "\u2605   WATCH"
   },
   {
@@ -206,7 +206,7 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 6.08,
+    "score10": 5.68,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -253,9 +253,9 @@
   },
   {
     "stock": "ARSSBL",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "ANAND RATHI SH N STK BR L",
+    "sector": "Financial Services",
+    "cap_class": "Small",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -269,7 +269,7 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 4.05,
+    "score10": 4.3,
     "tier": "\u2605   WATCH"
   },
   {
@@ -290,7 +290,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.57,
+    "score10": 5.87,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -316,9 +316,9 @@
   },
   {
     "stock": "SKYGOLD",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Sky Gold and Diamonds Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Mid",
     "pattern": "DoubleBottom",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -337,9 +337,9 @@
   },
   {
     "stock": "SKYGOLD",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Sky Gold and Diamonds Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Mid",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -374,7 +374,7 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 6.17,
+    "score10": 6.47,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -395,14 +395,14 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.77,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.47,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "ASIANTILES",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Asian Granito India Limited",
+    "sector": "Industrials",
+    "cap_class": "Small",
     "pattern": "InvHS",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-21",
@@ -416,8 +416,8 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.83,
-    "tier": "\u2717   AVOID"
+    "score10": 4.15,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "JAINREC",
@@ -463,9 +463,9 @@
   },
   {
     "stock": "NESTLEIND",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Nestl\u00e9 India Limited",
+    "sector": "Consumer Defensive",
+    "cap_class": "Large",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-29",
@@ -484,9 +484,9 @@
   },
   {
     "stock": "YATHARTH",
-    "name": "Yatharth Hospital & Trauma Care Services Limited",
-    "sector": "Healthcare",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "InvHS",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -521,14 +521,14 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.55,
+    "score10": 3.95,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "NESTLEIND",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Nestl\u00e9 India Limited",
+    "sector": "Consumer Defensive",
+    "cap_class": "Large",
     "pattern": "BullFlag",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -547,9 +547,9 @@
   },
   {
     "stock": "NETWEB",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Netweb Technologies India Limited",
+    "sector": "Technology",
+    "cap_class": "Large",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -584,7 +584,7 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.87,
+    "score10": 6.17,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -605,14 +605,14 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 5.75,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.15,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "YATHARTH",
-    "name": "Yatharth Hospital & Trauma Care Services Limited",
-    "sector": "Healthcare",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FlatBase",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-21",
@@ -715,9 +715,9 @@
   },
   {
     "stock": "ARIS",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Arisinfra Solutions Limited",
+    "sector": "Industrials",
+    "cap_class": "Small",
     "pattern": "DoubleBottom",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-02-20",
@@ -731,7 +731,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.3,
+    "score10": 2.88,
     "tier": "\u2717   AVOID"
   },
   {
@@ -773,14 +773,14 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.12,
+    "score10": 4.42,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "SKYGOLD",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Sky Gold and Diamonds Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Mid",
     "pattern": "InvHS",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -820,9 +820,9 @@
   },
   {
     "stock": "NESTLEIND",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Nestl\u00e9 India Limited",
+    "sector": "Consumer Defensive",
+    "cap_class": "Large",
     "pattern": "InvHS",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-05-20",
@@ -857,14 +857,14 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.07,
+    "score10": 4.67,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "THELEELA",
-    "name": "Leela Palaces Hotels & Resorts Limited",
-    "sector": "Consumer Cyclical",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "InvHS",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-02-20",
@@ -878,7 +878,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.2,
+    "score10": 3.47,
     "tier": "\u2717   AVOID"
   },
   {
@@ -899,7 +899,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.87,
+    "score10": 4.17,
     "tier": "\u2605   WATCH"
   },
   {
@@ -925,9 +925,9 @@
   },
   {
     "stock": "YATHARTH",
-    "name": "Yatharth Hospital & Trauma Care Services Limited",
-    "sector": "Healthcare",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -962,7 +962,7 @@
     "t3_eta": "2026-07-03",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 5.47,
+    "score10": 5.17,
     "tier": "\u2605   WATCH"
   },
   {
@@ -988,9 +988,9 @@
   },
   {
     "stock": "TVSMOTOR",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "TVS Motor Company Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -1004,7 +1004,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.92,
+    "score10": 4.0,
     "tier": "\u2605   WATCH"
   },
   {
@@ -1030,9 +1030,9 @@
   },
   {
     "stock": "BSE",
-    "name": "BSE Limited",
-    "sector": "Financial Services",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "VCP",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-21",
@@ -1046,14 +1046,14 @@
     "t3_eta": "2026-08-14",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 7.18,
-    "tier": "\u2605\u2605\u2605 BUY STRONG"
+    "score10": 6.77,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "MTARTECH",
-    "name": "MTAR Technologies Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -1067,7 +1067,7 @@
     "t3_eta": "2026-07-03",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 6.93,
+    "score10": 6.52,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -1093,9 +1093,9 @@
   },
   {
     "stock": "EQUITASBNK",
-    "name": "Equitas Small Finance Bank Limited",
-    "sector": "Financial Services",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-29",
@@ -1109,7 +1109,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 6.13,
+    "score10": 5.72,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -1130,8 +1130,8 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 7.03,
-    "tier": "\u2605\u2605\u2605 BUY STRONG"
+    "score10": 6.73,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "ANGELONE",
@@ -1151,7 +1151,7 @@
     "t3_eta": "2026-09-11",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 6.58,
+    "score10": 6.28,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -1172,14 +1172,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.92,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.03,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "UJJIVANSFB",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Ujjivan Small Finance Bank Limited",
+    "sector": "Financial Services",
+    "cap_class": "Mid",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-10-10",
@@ -1193,8 +1193,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.08,
-    "tier": "\u2717   AVOID"
+    "score10": 4.42,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "BHEL",
@@ -1240,9 +1240,9 @@
   },
   {
     "stock": "SOLARINDS",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Solar Industries India Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
     "pattern": "DoubleBottom",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-12-22",
@@ -1256,14 +1256,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.27,
-    "tier": "\u2605   WATCH"
+    "score10": 5.68,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "SJS",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "S.J.S. Enterprises Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Mid",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-29",
@@ -1277,7 +1277,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.67,
+    "score10": 6.68,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -1298,8 +1298,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.53,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.23,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "GROWW",
@@ -1340,7 +1340,7 @@
     "t3_eta": "2026-07-03",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 6.68,
+    "score10": 6.38,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -1492,9 +1492,9 @@
   },
   {
     "stock": "BSE",
-    "name": "BSE Limited",
-    "sector": "Financial Services",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-12-23",
@@ -1508,8 +1508,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.68,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.27,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "APLAPOLLO",
@@ -1555,9 +1555,9 @@
   },
   {
     "stock": "ENRIN",
-    "name": "Siemens Energy India Limited",
-    "sector": "Utilities",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-12-23",
@@ -1571,7 +1571,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.23,
+    "score10": 4.82,
     "tier": "\u2605   WATCH"
   },
   {
@@ -1613,8 +1613,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.25,
-    "tier": "\u2605   WATCH"
+    "score10": 5.55,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "GROWW",
@@ -1639,9 +1639,9 @@
   },
   {
     "stock": "SOLARINDS",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Solar Industries India Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
     "pattern": "BullFlag",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -1655,14 +1655,14 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 5.27,
-    "tier": "\u2605   WATCH"
+    "score10": 5.68,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "POLICYBZR",
-    "name": "PB Fintech Limited",
-    "sector": "Financial Services",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-10-09",
@@ -1676,7 +1676,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 6.58,
+    "score10": 5.57,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -1702,9 +1702,9 @@
   },
   {
     "stock": "ZFCVINDIA",
-    "name": "ZF Commercial Vehicle Control Systems India Limited",
-    "sector": "Consumer Cyclical",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-29",
@@ -1718,14 +1718,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.48,
-    "tier": "\u2605   WATCH"
+    "score10": 5.57,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "CARBORUNIV",
-    "name": "Carborundum Universal Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-28",
@@ -1739,14 +1739,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.48,
+    "score10": 4.97,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "HONASA",
-    "name": "Honasa Consumer Limited",
-    "sector": "Consumer Defensive",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-28",
@@ -1760,7 +1760,7 @@
     "t3_eta": "2026-09-11",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 6.28,
+    "score10": 5.57,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -1802,7 +1802,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.12,
+    "score10": 4.23,
     "tier": "\u2605   WATCH"
   },
   {
@@ -1823,7 +1823,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.45,
+    "score10": 4.75,
     "tier": "\u2605   WATCH"
   },
   {
@@ -1844,14 +1844,14 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 6.23,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.33,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "TVSMOTOR",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "TVS Motor Company Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Large",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-10-10",
@@ -1865,7 +1865,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.92,
+    "score10": 4.0,
     "tier": "\u2605   WATCH"
   },
   {
@@ -1886,7 +1886,7 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.55,
+    "score10": 5.85,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -1912,9 +1912,9 @@
   },
   {
     "stock": "THERMAX",
-    "name": "Thermax Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -1928,14 +1928,14 @@
     "t3_eta": "2026-07-03",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 5.3,
-    "tier": "\u2605   WATCH"
+    "score10": 5.72,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "HONASA",
-    "name": "Honasa Consumer Limited",
-    "sector": "Consumer Defensive",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-06",
@@ -1949,14 +1949,14 @@
     "t3_eta": "2026-07-03",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 5.98,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.27,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "MTARTECH",
-    "name": "MTAR Technologies Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-10-10",
@@ -1970,7 +1970,7 @@
     "t3_eta": "2026-09-11",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 6.33,
+    "score10": 5.92,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -1996,9 +1996,9 @@
   },
   {
     "stock": "LAURUSLABS",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Laurus Labs Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
     "pattern": "DoubleBottom",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-12-23",
@@ -2012,14 +2012,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.12,
+    "score10": 4.7,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "NAVINFLUOR",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Navin Fluorine International Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
     "pattern": "DoubleBottom",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-12-22",
@@ -2033,8 +2033,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.92,
-    "tier": "\u2605   WATCH"
+    "score10": 5.63,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "SAIL",
@@ -2122,9 +2122,9 @@
   },
   {
     "stock": "EQUITASBNK",
-    "name": "Equitas Small Finance Bank Limited",
-    "sector": "Financial Services",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -2138,14 +2138,14 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 4.73,
+    "score10": 4.32,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "LENSKART",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "LENSKART SOLUTIONS LTD",
+    "sector": "Healthcare",
+    "cap_class": "Large",
     "pattern": "DoubleBottom",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-12-23",
@@ -2159,14 +2159,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 6.6,
+    "score10": 5.6,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "THERMAX",
-    "name": "Thermax Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-10-09",
@@ -2180,14 +2180,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.15,
-    "tier": "\u2605   WATCH"
+    "score10": 5.57,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "LENSKART",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "LENSKART SOLUTIONS LTD",
+    "sector": "Healthcare",
+    "cap_class": "Large",
     "pattern": "FlatBase",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-21",
@@ -2201,14 +2201,14 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.5,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 4.5,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "ENRIN",
-    "name": "Siemens Energy India Limited",
-    "sector": "Utilities",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "InvHS",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -2222,7 +2222,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.23,
+    "score10": 4.67,
     "tier": "\u2605   WATCH"
   },
   {
@@ -2248,9 +2248,9 @@
   },
   {
     "stock": "HONASA",
-    "name": "Honasa Consumer Limited",
-    "sector": "Consumer Defensive",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "InvHS",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-08-26",
@@ -2264,8 +2264,8 @@
     "t3_eta": "2026-10-09",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 6.28,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.42,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "GRANULES",
@@ -2306,14 +2306,14 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.55,
+    "score10": 5.85,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "CARBORUNIV",
-    "name": "Carborundum Universal Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "InvHS",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-21",
@@ -2327,7 +2327,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.48,
+    "score10": 4.82,
     "tier": "\u2605   WATCH"
   },
   {
@@ -2374,9 +2374,9 @@
   },
   {
     "stock": "ZFCVINDIA",
-    "name": "ZF Commercial Vehicle Control Systems India Limited",
-    "sector": "Consumer Cyclical",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "InvHS",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-21",
@@ -2390,7 +2390,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.38,
+    "score10": 4.47,
     "tier": "\u2605   WATCH"
   },
   {
@@ -2453,8 +2453,8 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 4.88,
-    "tier": "\u2605   WATCH"
+    "score10": 5.78,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "GVT&D",
@@ -2479,9 +2479,9 @@
   },
   {
     "stock": "UJJIVANSFB",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Ujjivan Small Finance Bank Limited",
+    "sector": "Financial Services",
+    "cap_class": "Mid",
     "pattern": "FlatBase",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-02-19",
@@ -2495,8 +2495,8 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.58,
-    "tier": "\u2717   AVOID"
+    "score10": 3.92,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "STAR",
@@ -2521,9 +2521,9 @@
   },
   {
     "stock": "LAURUSLABS",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Laurus Labs Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
     "pattern": "FlatBase",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-02-19",
@@ -2537,14 +2537,14 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.82,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.4,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "CARBORUNIV",
-    "name": "Carborundum Universal Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -2558,14 +2558,14 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 6.53,
+    "score10": 6.02,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "HONASA",
-    "name": "Honasa Consumer Limited",
-    "sector": "Consumer Defensive",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FlatBase",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-02-19",
@@ -2579,14 +2579,14 @@
     "t3_eta": "2026-07-24",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 6.28,
+    "score10": 5.57,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "ENRIN",
-    "name": "Siemens Energy India Limited",
-    "sector": "Utilities",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FlatBase",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-22",
@@ -2600,7 +2600,7 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 6.13,
+    "score10": 5.72,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -2647,9 +2647,9 @@
   },
   {
     "stock": "EQUITASBNK",
-    "name": "Equitas Small Finance Bank Limited",
-    "sector": "Financial Services",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "InvHS",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-02-19",
@@ -2663,7 +2663,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.33,
+    "score10": 3.92,
     "tier": "\u2605   WATCH"
   },
   {
@@ -2705,7 +2705,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.75,
+    "score10": 4.05,
     "tier": "\u2605   WATCH"
   },
   {
@@ -2768,14 +2768,14 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 7.18,
-    "tier": "\u2605\u2605\u2605 BUY STRONG"
+    "score10": 6.88,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "LAURUSLABS",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Laurus Labs Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
     "pattern": "InvHS",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-02-19",
@@ -2789,7 +2789,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.82,
+    "score10": 4.4,
     "tier": "\u2605   WATCH"
   },
   {
@@ -2852,14 +2852,14 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.23,
+    "score10": 4.83,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "LENSKART",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "LENSKART SOLUTIONS LTD",
+    "sector": "Healthcare",
+    "cap_class": "Large",
     "pattern": "InvHS",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -2873,7 +2873,7 @@
     "t3_eta": "2026-10-09",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 4.95,
+    "score10": 3.8,
     "tier": "\u2605   WATCH"
   },
   {
@@ -2894,7 +2894,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.63,
+    "score10": 2.53,
     "tier": "\u2717   AVOID"
   },
   {
@@ -2920,9 +2920,9 @@
   },
   {
     "stock": "NAVINFLUOR",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Navin Fluorine International Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
     "pattern": "InvHS",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-05-19",
@@ -2936,14 +2936,14 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.42,
+    "score10": 5.13,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "LAURUSLABS",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Laurus Labs Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
     "pattern": "BullFlag",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-23",
@@ -2957,14 +2957,14 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 6.52,
+    "score10": 6.1,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "ZFCVINDIA",
-    "name": "ZF Commercial Vehicle Control Systems India Limited",
-    "sector": "Consumer Cyclical",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -2978,8 +2978,8 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 3.48,
-    "tier": "\u2717   AVOID"
+    "score10": 3.57,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "APLAPOLLO",
@@ -3004,9 +3004,9 @@
   },
   {
     "stock": "BSE",
-    "name": "BSE Limited",
-    "sector": "Financial Services",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "InvHS",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-05-20",
@@ -3020,7 +3020,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.18,
+    "score10": 4.77,
     "tier": "\u2605   WATCH"
   },
   {
@@ -3041,14 +3041,14 @@
     "t3_eta": "2026-10-09",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 6.08,
+    "score10": 5.78,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "CARBORUNIV",
-    "name": "Carborundum Universal Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FlatBase",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-02-19",
@@ -3062,14 +3062,14 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 6.38,
+    "score10": 5.87,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "NAVINFLUOR",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Navin Fluorine International Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
     "pattern": "FlatBase",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-24",
@@ -3083,8 +3083,8 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.92,
-    "tier": "\u2605   WATCH"
+    "score10": 5.63,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "GRANULES",
@@ -3109,9 +3109,9 @@
   },
   {
     "stock": "SOLARINDS",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Solar Industries India Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
     "pattern": "FlatBase",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-24",
@@ -3125,7 +3125,7 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 6.17,
+    "score10": 6.58,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -3151,9 +3151,9 @@
   },
   {
     "stock": "TVSMOTOR",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "TVS Motor Company Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Large",
     "pattern": "FlatBase",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -3167,14 +3167,14 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.52,
+    "score10": 3.6,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "TVSMOTOR",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "TVS Motor Company Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Large",
     "pattern": "InvHS",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-05-20",
@@ -3188,14 +3188,14 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.42,
-    "tier": "\u2717   AVOID"
+    "score10": 3.5,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "ZFCVINDIA",
-    "name": "ZF Commercial Vehicle Control Systems India Limited",
-    "sector": "Consumer Cyclical",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FlatBase",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -3209,7 +3209,7 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.83,
+    "score10": 3.92,
     "tier": "\u2605   WATCH"
   },
   {
@@ -3272,14 +3272,14 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.55,
+    "score10": 3.85,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "SJS",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "S.J.S. Enterprises Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Mid",
     "pattern": "FlatBase",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -3293,14 +3293,14 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.87,
-    "tier": "\u2605   WATCH"
+    "score10": 5.88,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "BSE",
-    "name": "BSE Limited",
-    "sector": "Financial Services",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FlatBase",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-02-19",
@@ -3314,14 +3314,14 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 6.58,
+    "score10": 6.17,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "SOLARINDS",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Solar Industries India Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
     "pattern": "InvHS",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-08-26",
@@ -3335,14 +3335,14 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.77,
+    "score10": 5.18,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "UJJIVANSFB",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Ujjivan Small Finance Bank Limited",
+    "sector": "Financial Services",
+    "cap_class": "Mid",
     "pattern": "InvHS",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-02-19",
@@ -3356,8 +3356,8 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.28,
-    "tier": "\u2717   AVOID"
+    "score10": 3.62,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "GROWW",
@@ -3440,7 +3440,7 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 5.05,
+    "score10": 5.35,
     "tier": "\u2605   WATCH"
   },
   {
@@ -3461,7 +3461,7 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 4.58,
+    "score10": 4.18,
     "tier": "\u2605   WATCH"
   },
   {
@@ -3503,14 +3503,14 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 5.73,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.33,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "SJS",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "S.J.S. Enterprises Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Mid",
     "pattern": "BullFlag",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-23",
@@ -3524,7 +3524,7 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 5.82,
+    "score10": 6.83,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -3550,9 +3550,9 @@
   },
   {
     "stock": "NAVINFLUOR",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Navin Fluorine International Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -3566,8 +3566,8 @@
     "t3_eta": "2026-07-03",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 4.82,
-    "tier": "\u2605   WATCH"
+    "score10": 5.53,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "PERSISTENT",
@@ -3608,8 +3608,8 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.67,
-    "tier": "\u2717   AVOID"
+    "score10": 3.57,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "M&M",
@@ -3634,9 +3634,9 @@
   },
   {
     "stock": "MUTHOOTFIN",
-    "name": "Muthoot Finance Limited",
-    "sector": "Financial Services",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FallingWedge",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -3650,7 +3650,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.5,
+    "score10": 4.28,
     "tier": "\u2605   WATCH"
   },
   {
@@ -3713,14 +3713,14 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.67,
+    "score10": 4.17,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "BPCL",
-    "name": "Bharat Petroleum Corporation Limited",
-    "sector": "Energy",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -3734,8 +3734,8 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.52,
-    "tier": "\u2605   WATCH"
+    "score10": 2.68,
+    "tier": "\u2717   AVOID"
   },
   {
     "stock": "CARTRADE",
@@ -3755,7 +3755,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.17,
+    "score10": 5.07,
     "tier": "\u2605   WATCH"
   },
   {
@@ -3860,8 +3860,8 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.25,
-    "tier": "\u2717   AVOID"
+    "score10": 4.45,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "AXISCADES",
@@ -3902,7 +3902,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.37,
+    "score10": 5.07,
     "tier": "\u2605   WATCH"
   },
   {
@@ -3949,9 +3949,9 @@
   },
   {
     "stock": "UNIVCABLES",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Universal Cables Limited",
+    "sector": "Industrials",
+    "cap_class": "Small",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-10-10",
@@ -4007,14 +4007,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.52,
+    "score10": 5.82,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "NETWEB",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Netweb Technologies India Limited",
+    "sector": "Technology",
+    "cap_class": "Large",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-29",
@@ -4070,7 +4070,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 6.12,
+    "score10": 6.42,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -4117,9 +4117,9 @@
   },
   {
     "stock": "ETERNAL",
-    "name": "Eternal Limited",
-    "sector": "Consumer Cyclical",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-12-23",
@@ -4133,14 +4133,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.27,
-    "tier": "\u2605   WATCH"
+    "score10": 3.43,
+    "tier": "\u2717   AVOID"
   },
   {
     "stock": "TFCILTD",
-    "name": "Tourism Finance Corporation of India Limited",
-    "sector": "Financial Services",
-    "cap_class": "Small",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-29",
@@ -4154,14 +4154,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.53,
-    "tier": "\u2605   WATCH"
+    "score10": 6.37,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "POWERINDIA",
-    "name": "Hitachi Energy India Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-10-10",
@@ -4180,9 +4180,9 @@
   },
   {
     "stock": "ASIANTILES",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Asian Granito India Limited",
+    "sector": "Industrials",
+    "cap_class": "Small",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-29",
@@ -4196,8 +4196,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.83,
-    "tier": "\u2717   AVOID"
+    "score10": 4.15,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "IRMENERGY",
@@ -4217,8 +4217,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.75,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.45,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "PERSISTENT",
@@ -4264,9 +4264,9 @@
   },
   {
     "stock": "KRISHANA",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Krishana Phoschem Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Small",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-28",
@@ -4301,8 +4301,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.72,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.22,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "LTF",
@@ -4322,14 +4322,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.85,
+    "score10": 5.05,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "KMEW",
-    "name": "Knowledge Marine & Engineering Works Limited",
-    "sector": "Industrials",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-10-10",
@@ -4364,7 +4364,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.9,
+    "score10": 5.6,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -4453,9 +4453,9 @@
   },
   {
     "stock": "BPCL",
-    "name": "Bharat Petroleum Corporation Limited",
-    "sector": "Energy",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-29",
@@ -4469,14 +4469,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.12,
-    "tier": "\u2605   WATCH"
+    "score10": 3.28,
+    "tier": "\u2717   AVOID"
   },
   {
     "stock": "MUTHOOTFIN",
-    "name": "Muthoot Finance Limited",
-    "sector": "Financial Services",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-29",
@@ -4490,7 +4490,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.5,
+    "score10": 4.28,
     "tier": "\u2605   WATCH"
   },
   {
@@ -4511,7 +4511,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.05,
+    "score10": 3.55,
     "tier": "\u2605   WATCH"
   },
   {
@@ -4637,8 +4637,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.42,
-    "tier": "\u2605   WATCH"
+    "score10": 6.42,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "EDELWEISS",
@@ -4658,8 +4658,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.93,
-    "tier": "\u2717   AVOID"
+    "score10": 3.83,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "PGEL",
@@ -4705,9 +4705,9 @@
   },
   {
     "stock": "PREMIERENE",
-    "name": "PREMIER ENERGIES LIMITED",
-    "sector": "Technology",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FlatBase",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-21",
@@ -4721,14 +4721,14 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.97,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.37,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "CLEANMAX",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "CLEAN MAX ENVIRO EN SOL L",
+    "sector": "Utilities",
+    "cap_class": "Mid",
     "pattern": "BullFlag",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -4742,14 +4742,14 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 5.15,
+    "score10": 4.53,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "POLYCAB",
-    "name": "Polycab India Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-12-23",
@@ -4763,8 +4763,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.18,
-    "tier": "\u2605   WATCH"
+    "score10": 5.72,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "PVRINOX",
@@ -4826,7 +4826,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.47,
+    "score10": 5.37,
     "tier": "\u2605   WATCH"
   },
   {
@@ -4852,9 +4852,9 @@
   },
   {
     "stock": "THANGAMAYL",
-    "name": "Thangamayil Jewellery Limited",
-    "sector": "Consumer Cyclical",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-10-10",
@@ -4868,7 +4868,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.77,
+    "score10": 5.37,
     "tier": "\u2605   WATCH"
   },
   {
@@ -4894,9 +4894,9 @@
   },
   {
     "stock": "PRECWIRE",
-    "name": "Precision Wires India Limited",
-    "sector": "Industrials",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-10-10",
@@ -4936,9 +4936,9 @@
   },
   {
     "stock": "SGFIN",
-    "name": "SG Finserve Limited",
-    "sector": "Financial Services",
-    "cap_class": "Small",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-10-10",
@@ -4952,7 +4952,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.7,
+    "score10": 6.2,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -5015,8 +5015,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.17,
-    "tier": "\u2605   WATCH"
+    "score10": 5.87,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "DYNAMATECH",
@@ -5083,9 +5083,9 @@
   },
   {
     "stock": "HINDPETRO",
-    "name": "Hindustan Petroleum Corporation Limited",
-    "sector": "Energy",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-29",
@@ -5099,8 +5099,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.12,
-    "tier": "\u2605   WATCH"
+    "score10": 3.28,
+    "tier": "\u2717   AVOID"
   },
   {
     "stock": "CPPLUS",
@@ -5141,14 +5141,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.45,
+    "score10": 4.85,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "SENORES",
-    "name": "SENORES PHARMACEUTICALS L",
-    "sector": "Healthcare",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-29",
@@ -5167,9 +5167,9 @@
   },
   {
     "stock": "ENGINERSIN",
-    "name": "Engineers India Limited",
-    "sector": "Industrials",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-12-23",
@@ -5188,9 +5188,9 @@
   },
   {
     "stock": "SGFIN",
-    "name": "SG Finserve Limited",
-    "sector": "Financial Services",
-    "cap_class": "Small",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-09",
@@ -5204,7 +5204,7 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 6.1,
+    "score10": 6.6,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -5225,7 +5225,7 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 3.72,
+    "score10": 4.02,
     "tier": "\u2605   WATCH"
   },
   {
@@ -5246,7 +5246,7 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 5.4,
+    "score10": 5.1,
     "tier": "\u2605   WATCH"
   },
   {
@@ -5288,14 +5288,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.57,
+    "score10": 5.07,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "UBL",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "United Breweries Limited",
+    "sector": "Consumer Defensive",
+    "cap_class": "Large",
     "pattern": "DoubleBottom",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-12-23",
@@ -5314,9 +5314,9 @@
   },
   {
     "stock": "POWERINDIA",
-    "name": "Hitachi Energy India Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -5351,7 +5351,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.87,
+    "score10": 5.57,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -5372,14 +5372,14 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.77,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.37,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "KRISHANA",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Krishana Phoschem Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Small",
     "pattern": "InvHS",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-05-19",
@@ -5414,7 +5414,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.37,
+    "score10": 5.07,
     "tier": "\u2605   WATCH"
   },
   {
@@ -5435,14 +5435,14 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 4.37,
+    "score10": 3.87,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "YATHARTH",
-    "name": "Yatharth Hospital & Trauma Care Services Limited",
-    "sector": "Healthcare",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-29",
@@ -5498,8 +5498,8 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 5.67,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 4.97,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "MANORAMA",
@@ -5566,9 +5566,9 @@
   },
   {
     "stock": "PRECWIRE",
-    "name": "Precision Wires India Limited",
-    "sector": "Industrials",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -5587,9 +5587,9 @@
   },
   {
     "stock": "EMMVEE",
-    "name": "EMMVEE PHOTOVOLTAIC PWR L",
-    "sector": "Technology",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-12-23",
@@ -5603,14 +5603,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.2,
-    "tier": "\u2605   WATCH"
+    "score10": 5.7,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "THELEELA",
-    "name": "Leela Palaces Hotels & Resorts Limited",
-    "sector": "Consumer Cyclical",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-28",
@@ -5624,7 +5624,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.95,
+    "score10": 4.37,
     "tier": "\u2605   WATCH"
   },
   {
@@ -5645,14 +5645,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.27,
+    "score10": 4.67,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "ARSSBL",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "ANAND RATHI SH N STK BR L",
+    "sector": "Financial Services",
+    "cap_class": "Small",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-10-10",
@@ -5666,14 +5666,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.55,
+    "score10": 4.8,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "PREMIERENE",
-    "name": "PREMIER ENERGIES LIMITED",
-    "sector": "Technology",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-06",
@@ -5687,14 +5687,14 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 5.47,
+    "score10": 4.87,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "CHOLAHLDNG",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Cholamandalam Financial Holdings Limited",
+    "sector": "Financial Services",
+    "cap_class": "Large",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-29",
@@ -5734,9 +5734,9 @@
   },
   {
     "stock": "SGFIN",
-    "name": "SG Finserve Limited",
-    "sector": "Financial Services",
-    "cap_class": "Small",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FlatBase",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-22",
@@ -5750,14 +5750,14 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 6.1,
+    "score10": 6.6,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "HSCL",
-    "name": "Himadri Speciality Chemical Limited",
-    "sector": "Basic Materials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -5771,7 +5771,7 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 5.82,
+    "score10": 5.52,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -5834,8 +5834,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.87,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.47,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "WAAREEENER",
@@ -5855,7 +5855,7 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.05,
+    "score10": 3.55,
     "tier": "\u2605   WATCH"
   },
   {
@@ -5923,9 +5923,9 @@
   },
   {
     "stock": "ENGINERSIN",
-    "name": "Engineers India Limited",
-    "sector": "Industrials",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -5960,7 +5960,7 @@
     "t3_eta": "2026-09-11",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 6.07,
+    "score10": 6.47,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -5986,9 +5986,9 @@
   },
   {
     "stock": "PREMIERENE",
-    "name": "PREMIER ENERGIES LIMITED",
-    "sector": "Technology",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-12-23",
@@ -6002,8 +6002,8 @@
     "t3_eta": "2026-09-11",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 5.57,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 4.97,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "UTLSOLAR",
@@ -6044,7 +6044,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.57,
+    "score10": 5.87,
     "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
@@ -6070,9 +6070,9 @@
   },
   {
     "stock": "ASIANTILES",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Asian Granito India Limited",
+    "sector": "Industrials",
+    "cap_class": "Small",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -6086,7 +6086,7 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 1.23,
+    "score10": 2.55,
     "tier": "\u2717   AVOID"
   },
   {
@@ -6133,9 +6133,9 @@
   },
   {
     "stock": "PRESTIGE",
-    "name": "Prestige Estates Projects Limited",
-    "sector": "Real Estate",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-12-23",
@@ -6149,7 +6149,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.97,
+    "score10": 4.13,
     "tier": "\u2605   WATCH"
   },
   {
@@ -6170,8 +6170,8 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.12,
-    "tier": "\u2605   WATCH"
+    "score10": 6.12,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "ANANDRATHI",
@@ -6196,9 +6196,9 @@
   },
   {
     "stock": "ARIS",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Arisinfra Solutions Limited",
+    "sector": "Industrials",
+    "cap_class": "Small",
     "pattern": "BullFlag",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-09",
@@ -6212,7 +6212,7 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 4.6,
+    "score10": 4.18,
     "tier": "\u2605   WATCH"
   },
   {
@@ -6254,8 +6254,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.97,
-    "tier": "\u2605   WATCH"
+    "score10": 5.67,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "HAL",
@@ -6275,8 +6275,8 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 3.88,
-    "tier": "\u2605   WATCH"
+    "score10": 2.98,
+    "tier": "\u2717   AVOID"
   },
   {
     "stock": "JSWENERGY",
@@ -6296,7 +6296,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.83,
+    "score10": 3.53,
     "tier": "\u2605   WATCH"
   },
   {
@@ -6317,7 +6317,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.98,
+    "score10": 4.08,
     "tier": "\u2605   WATCH"
   },
   {
@@ -6364,9 +6364,9 @@
   },
   {
     "stock": "UNIVCABLES",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Universal Cables Limited",
+    "sector": "Industrials",
+    "cap_class": "Small",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -6406,9 +6406,9 @@
   },
   {
     "stock": "HFCL",
-    "name": "HFCL Limited",
-    "sector": "Technology",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-12-23",
@@ -6422,7 +6422,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.7,
+    "score10": 5.12,
     "tier": "\u2605   WATCH"
   },
   {
@@ -6469,9 +6469,9 @@
   },
   {
     "stock": "HSCL",
-    "name": "Himadri Speciality Chemical Limited",
-    "sector": "Basic Materials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-10-10",
@@ -6485,7 +6485,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.12,
+    "score10": 4.82,
     "tier": "\u2605   WATCH"
   },
   {
@@ -6527,7 +6527,7 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 5.47,
+    "score10": 4.87,
     "tier": "\u2605   WATCH"
   },
   {
@@ -6548,8 +6548,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.67,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 4.97,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "IPCALAB",
@@ -6569,7 +6569,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.72,
+    "score10": 4.42,
     "tier": "\u2605   WATCH"
   },
   {
@@ -6590,7 +6590,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.73,
+    "score10": 5.23,
     "tier": "\u2605   WATCH"
   },
   {
@@ -6679,9 +6679,9 @@
   },
   {
     "stock": "HINDUNILVR",
-    "name": "Hindustan Unilever Limited",
-    "sector": "Consumer Defensive",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-10-10",
@@ -6695,8 +6695,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.22,
-    "tier": "\u2717   AVOID"
+    "score10": 3.63,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "CENTRALBK",
@@ -6721,9 +6721,9 @@
   },
   {
     "stock": "HOMEFIRST",
-    "name": "Home First Finance Company India Limited",
-    "sector": "Financial Services",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -6737,7 +6737,7 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 3.47,
+    "score10": 2.63,
     "tier": "\u2717   AVOID"
   },
   {
@@ -6758,14 +6758,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.17,
+    "score10": 5.47,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "HOMEFIRST",
-    "name": "Home First Finance Company India Limited",
-    "sector": "Financial Services",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-10-10",
@@ -6779,14 +6779,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.97,
-    "tier": "\u2605   WATCH"
+    "score10": 3.13,
+    "tier": "\u2717   AVOID"
   },
   {
     "stock": "TFCILTD",
-    "name": "Tourism Finance Corporation of India Limited",
-    "sector": "Financial Services",
-    "cap_class": "Small",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "InvHS",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -6800,8 +6800,8 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.33,
-    "tier": "\u2717   AVOID"
+    "score10": 5.17,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "MANORAMA",
@@ -6842,28 +6842,28 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.1,
+    "score10": 4.1,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "POLYCAB",
-    "name": "Polycab India Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "InvHS",
-    "timeframe": "Medium-Long (3-6m)",
-    "pattern_formed": "2026-01-21",
-    "formation_days": 80,
-    "breakout_zone": 8169.25,
+    "timeframe": "Long-term (6m+)",
+    "pattern_formed": "2025-08-28",
+    "formation_days": 180,
+    "breakout_zone": 7855.5,
     "stop_loss": 8697.07,
-    "target_1": 8856.38,
-    "risk_reward": 0.71,
+    "target_1": 8422.25,
+    "risk_reward": 0.56,
     "t1_eta": "2026-06-19",
     "t2_eta": "2026-07-31",
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.28,
+    "score10": 4.82,
     "tier": "\u2605   WATCH"
   },
   {
@@ -6884,7 +6884,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.97,
+    "score10": 4.47,
     "tier": "\u2605   WATCH"
   },
   {
@@ -6905,8 +6905,8 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 6.0,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.0,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "LUMAXTECH",
@@ -6926,14 +6926,14 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.32,
+    "score10": 5.17,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "PRESTIGE",
-    "name": "Prestige Estates Projects Limited",
-    "sector": "Real Estate",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -6947,7 +6947,7 @@
     "t3_eta": "2026-07-03",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 2.97,
+    "score10": 2.13,
     "tier": "\u2717   AVOID"
   },
   {
@@ -7036,9 +7036,9 @@
   },
   {
     "stock": "PRESTIGE",
-    "name": "Prestige Estates Projects Limited",
-    "sector": "Real Estate",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "InvHS",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-08-28",
@@ -7052,7 +7052,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.67,
+    "score10": 3.83,
     "tier": "\u2605   WATCH"
   },
   {
@@ -7073,7 +7073,7 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.82,
+    "score10": 4.52,
     "tier": "\u2605   WATCH"
   },
   {
@@ -7094,7 +7094,7 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 3.97,
+    "score10": 4.87,
     "tier": "\u2605   WATCH"
   },
   {
@@ -7141,9 +7141,9 @@
   },
   {
     "stock": "POWERINDIA",
-    "name": "Hitachi Energy India Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "InvHS",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -7178,14 +7178,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.62,
-    "tier": "\u2605\u2605  BUY MODERATE"
+    "score10": 5.22,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "THANGAMAYL",
-    "name": "Thangamayil Jewellery Limited",
-    "sector": "Consumer Cyclical",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FlatBase",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -7199,8 +7199,8 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.07,
-    "tier": "\u2605   WATCH"
+    "score10": 5.67,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "RUBICON",
@@ -7241,8 +7241,8 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.68,
-    "tier": "\u2605   WATCH"
+    "score10": 3.38,
+    "tier": "\u2717   AVOID"
   },
   {
     "stock": "WABAG",
@@ -7262,14 +7262,14 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.47,
+    "score10": 3.77,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "ETERNAL",
-    "name": "Eternal Limited",
-    "sector": "Consumer Cyclical",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "InvHS",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-05-20",
@@ -7283,8 +7283,8 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.12,
-    "tier": "\u2605   WATCH"
+    "score10": 3.28,
+    "tier": "\u2717   AVOID"
   },
   {
     "stock": "SBFC",
@@ -7309,9 +7309,9 @@
   },
   {
     "stock": "UNIVCABLES",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Universal Cables Limited",
+    "sector": "Industrials",
+    "cap_class": "Small",
     "pattern": "InvHS",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-21",
@@ -7330,9 +7330,9 @@
   },
   {
     "stock": "UBL",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "United Breweries Limited",
+    "sector": "Consumer Defensive",
+    "cap_class": "Large",
     "pattern": "FlatBase",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-21",
@@ -7388,14 +7388,14 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.25,
+    "score10": 3.95,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "KMEW",
-    "name": "Knowledge Marine & Engineering Works Limited",
-    "sector": "Industrials",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "InvHS",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-02-20",
@@ -7414,9 +7414,9 @@
   },
   {
     "stock": "KRISHANA",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Krishana Phoschem Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Small",
     "pattern": "BullFlag",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-20",
@@ -7451,7 +7451,7 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.88,
+    "score10": 5.38,
     "tier": "\u2605   WATCH"
   },
   {
@@ -7472,7 +7472,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.92,
+    "score10": 4.77,
     "tier": "\u2605   WATCH"
   },
   {
@@ -7514,7 +7514,7 @@
     "t3_eta": "2026-07-03",
     "status": "Flag Forming",
     "added_date": "2026-05-23",
-    "score10": 5.22,
+    "score10": 4.72,
     "tier": "\u2605   WATCH"
   },
   {
@@ -7535,7 +7535,7 @@
     "t3_eta": "2026-07-24",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.37,
+    "score10": 4.67,
     "tier": "\u2605   WATCH"
   },
   {
@@ -7556,7 +7556,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.13,
+    "score10": 4.63,
     "tier": "\u2605   WATCH"
   },
   {
@@ -7577,7 +7577,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.22,
+    "score10": 3.82,
     "tier": "\u2605   WATCH"
   },
   {
@@ -7724,14 +7724,14 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.92,
+    "score10": 2.02,
     "tier": "\u2717   AVOID"
   },
   {
     "stock": "ULTRACEMCO",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "UltraTech Cement Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-21",
@@ -7745,7 +7745,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.67,
+    "score10": 4.0,
     "tier": "\u2605   WATCH"
   },
   {
@@ -7766,7 +7766,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.32,
+    "score10": 1.82,
     "tier": "\u2717   AVOID"
   },
   {
@@ -7787,14 +7787,14 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.3,
+    "score10": 3.9,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "TCS",
-    "name": "Tata Consultancy Services Limited",
-    "sector": "Technology",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -7808,14 +7808,14 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 1.52,
+    "score10": 1.93,
     "tier": "\u2717   AVOID"
   },
   {
     "stock": "MPHASIS",
-    "name": "Mphasis Limited",
-    "sector": "Technology",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -7871,7 +7871,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.27,
+    "score10": 4.77,
     "tier": "\u2605   WATCH"
   },
   {
@@ -7939,9 +7939,9 @@
   },
   {
     "stock": "COROMANDEL",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Coromandel International Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -7960,9 +7960,9 @@
   },
   {
     "stock": "NAUKRI",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Info Edge (India) Limited",
+    "sector": "Communication Services",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -7976,14 +7976,14 @@
     "t3_eta": "2026-08-21",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 3.18,
+    "score10": 2.98,
     "tier": "\u2717   AVOID"
   },
   {
     "stock": "IKS",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "INVENTURUS KNOWLEDGE SO L",
+    "sector": "Healthcare",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-24",
@@ -7997,7 +7997,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.02,
+    "score10": 4.52,
     "tier": "\u2605   WATCH"
   },
   {
@@ -8039,7 +8039,7 @@
     "t3_eta": "2026-08-21",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 4.9,
+    "score10": 4.6,
     "tier": "\u2605   WATCH"
   },
   {
@@ -8086,9 +8086,9 @@
   },
   {
     "stock": "BRITANNIA",
-    "name": "Britannia Industries Limited",
-    "sector": "Consumer Defensive",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-21",
@@ -8170,9 +8170,9 @@
   },
   {
     "stock": "NEWGEN",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Newgen Software Technologies Limited",
+    "sector": "Technology",
+    "cap_class": "Mid",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -8186,7 +8186,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 1.93,
+    "score10": 1.52,
     "tier": "\u2717   AVOID"
   },
   {
@@ -8212,9 +8212,9 @@
   },
   {
     "stock": "CHOLAHLDNG",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Cholamandalam Financial Holdings Limited",
+    "sector": "Financial Services",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -8291,14 +8291,14 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.75,
-    "tier": "\u2605   WATCH"
+    "score10": 3.25,
+    "tier": "\u2717   AVOID"
   },
   {
     "stock": "UBL",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "United Breweries Limited",
+    "sector": "Consumer Defensive",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-06",
@@ -8317,9 +8317,9 @@
   },
   {
     "stock": "ESCORTS",
-    "name": "Escorts Kubota Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -8333,7 +8333,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.07,
+    "score10": 3.48,
     "tier": "\u2717   AVOID"
   },
   {
@@ -8375,8 +8375,8 @@
     "t3_eta": "2026-08-21",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 4.3,
-    "tier": "\u2605   WATCH"
+    "score10": 3.4,
+    "tier": "\u2717   AVOID"
   },
   {
     "stock": "HDFCBANK",
@@ -8422,9 +8422,9 @@
   },
   {
     "stock": "RAMCOCEM",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "The Ramco Cements Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-24",
@@ -8438,7 +8438,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.53,
+    "score10": 4.17,
     "tier": "\u2605   WATCH"
   },
   {
@@ -8459,14 +8459,14 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.67,
+    "score10": 4.27,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "CIPLA",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Cipla Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -8480,7 +8480,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.88,
+    "score10": 2.38,
     "tier": "\u2717   AVOID"
   },
   {
@@ -8501,14 +8501,14 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.07,
+    "score10": 4.97,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "CONCORDBIO",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Concord Biotech Limited",
+    "sector": "Healthcare",
+    "cap_class": "Mid",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -8522,14 +8522,14 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.28,
+    "score10": 1.87,
     "tier": "\u2717   AVOID"
   },
   {
     "stock": "INDIAMART",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "IndiaMART InterMESH Limited",
+    "sector": "Communication Services",
+    "cap_class": "Mid",
     "pattern": "FallingWedge",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -8548,9 +8548,9 @@
   },
   {
     "stock": "CHOLAFIN",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Cholamandalam Investment and Finance Company Limited",
+    "sector": "Financial Services",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -8564,8 +8564,8 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.13,
-    "tier": "\u2717   AVOID"
+    "score10": 3.97,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "AURIONPRO",
@@ -8590,9 +8590,9 @@
   },
   {
     "stock": "TECHM",
-    "name": "Tech Mahindra Limited",
-    "sector": "Technology",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -8648,8 +8648,8 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.05,
-    "tier": "\u2717   AVOID"
+    "score10": 3.75,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "JINDALSTEL",
@@ -8669,7 +8669,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.05,
+    "score10": 5.45,
     "tier": "\u2605   WATCH"
   },
   {
@@ -8711,8 +8711,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.02,
-    "tier": "\u2605   WATCH"
+    "score10": 5.62,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "RPGLIFE",
@@ -8732,7 +8732,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.13,
+    "score10": 3.53,
     "tier": "\u2605   WATCH"
   },
   {
@@ -8795,7 +8795,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.08,
+    "score10": 3.78,
     "tier": "\u2605   WATCH"
   },
   {
@@ -8821,9 +8821,9 @@
   },
   {
     "stock": "ZENSARTECH",
-    "name": "Zensar Technologies Limited",
-    "sector": "Technology",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -8926,9 +8926,9 @@
   },
   {
     "stock": "SOBHA",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Sobha Limited",
+    "sector": "Real Estate",
+    "cap_class": "Mid",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-21",
@@ -8942,7 +8942,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.23,
+    "score10": 3.07,
     "tier": "\u2717   AVOID"
   },
   {
@@ -8984,7 +8984,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.57,
+    "score10": 2.07,
     "tier": "\u2717   AVOID"
   },
   {
@@ -9047,8 +9047,8 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.25,
-    "tier": "\u2717   AVOID"
+    "score10": 3.75,
+    "tier": "\u2605   WATCH"
   },
   {
     "stock": "VIMTALABS",
@@ -9152,14 +9152,14 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.4,
+    "score10": 3.8,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "THANGAMAYL",
-    "name": "Thangamayil Jewellery Limited",
-    "sector": "Consumer Cyclical",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FallingWedge",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -9173,8 +9173,8 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.07,
-    "tier": "\u2605   WATCH"
+    "score10": 5.67,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "OSWALPUMPS",
@@ -9220,9 +9220,9 @@
   },
   {
     "stock": "BRIGADE",
-    "name": "Brigade Enterprises Limited",
-    "sector": "Real Estate",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -9283,9 +9283,9 @@
   },
   {
     "stock": "KFINTECH",
-    "name": "KFin Technologies Limited",
-    "sector": "Technology",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -9304,9 +9304,9 @@
   },
   {
     "stock": "UNITDSPR",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "UNITED SPIRITS LIMITED",
+    "sector": "Consumer Defensive",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-22",
@@ -9320,7 +9320,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 1.93,
+    "score10": 2.77,
     "tier": "\u2717   AVOID"
   },
   {
@@ -9367,9 +9367,9 @@
   },
   {
     "stock": "UPL",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "UPL Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -9383,14 +9383,14 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 1.93,
+    "score10": 2.35,
     "tier": "\u2717   AVOID"
   },
   {
     "stock": "CLEAN",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Clean Science and Technology Limited",
+    "sector": "Basic Materials",
+    "cap_class": "Mid",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -9404,14 +9404,14 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.03,
+    "score10": 2.53,
     "tier": "\u2717   AVOID"
   },
   {
     "stock": "NH",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Narayana Hrudayalaya Limited",
+    "sector": "Healthcare",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -9425,7 +9425,7 @@
     "t3_eta": "2026-08-21",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 4.82,
+    "score10": 3.58,
     "tier": "\u2605   WATCH"
   },
   {
@@ -9451,9 +9451,9 @@
   },
   {
     "stock": "SMLMAH",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "SML MAHINDRA LIMITED",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Mid",
     "pattern": "FallingWedge",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-03-09",
@@ -9467,7 +9467,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.3,
+    "score10": 2.55,
     "tier": "\u2717   AVOID"
   },
   {
@@ -9509,7 +9509,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.52,
+    "score10": 2.02,
     "tier": "\u2717   AVOID"
   },
   {
@@ -9530,7 +9530,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.68,
+    "score10": 5.08,
     "tier": "\u2605   WATCH"
   },
   {
@@ -9614,14 +9614,14 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.97,
+    "score10": 4.47,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "HONAUT",
-    "name": "Honeywell Automation India Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-24",
@@ -9635,8 +9635,8 @@
     "t3_eta": "2026-08-21",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 3.52,
-    "tier": "\u2605   WATCH"
+    "score10": 3.23,
+    "tier": "\u2717   AVOID"
   },
   {
     "stock": "SANSERA",
@@ -9677,7 +9677,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.37,
+    "score10": 3.97,
     "tier": "\u2605   WATCH"
   },
   {
@@ -9698,14 +9698,14 @@
     "t3_eta": "2026-07-17",
     "status": "Pocket Pivot",
     "added_date": "2026-05-23",
-    "score10": 4.3,
-    "tier": "\u2605   WATCH"
+    "score10": 3.4,
+    "tier": "\u2717   AVOID"
   },
   {
     "stock": "INDIANB",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Indian Bank",
+    "sector": "Financial Services",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -9719,7 +9719,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.93,
+    "score10": 3.42,
     "tier": "\u2717   AVOID"
   },
   {
@@ -9740,14 +9740,14 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.18,
+    "score10": 4.88,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "RAYMONDLSL",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Raymond Lifestyle Limited",
+    "sector": "Consumer Cyclical",
+    "cap_class": "Small",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2026-01-22",
@@ -9761,14 +9761,14 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.28,
+    "score10": 3.08,
     "tier": "\u2717   AVOID"
   },
   {
     "stock": "ASTRAL",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Astral Limited",
+    "sector": "Industrials",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -9803,8 +9803,8 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 3.92,
-    "tier": "\u2605   WATCH"
+    "score10": 3.02,
+    "tier": "\u2717   AVOID"
   },
   {
     "stock": "DALBHARAT",
@@ -9845,7 +9845,7 @@
     "t3_eta": "2026-08-21",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 4.78,
+    "score10": 3.58,
     "tier": "\u2605   WATCH"
   },
   {
@@ -9866,7 +9866,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.6,
+    "score10": 5.1,
     "tier": "\u2605   WATCH"
   },
   {
@@ -9887,7 +9887,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 4.5,
+    "score10": 3.6,
     "tier": "\u2605   WATCH"
   },
   {
@@ -9913,9 +9913,9 @@
   },
   {
     "stock": "KDDL",
-    "name": "KDDL Limited",
-    "sector": "Consumer Cyclical",
-    "cap_class": "Small",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FallingWedge",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -9929,7 +9929,7 @@
     "t3_eta": "2026-08-21",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 4.95,
+    "score10": 5.07,
     "tier": "\u2605   WATCH"
   },
   {
@@ -9950,14 +9950,14 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.93,
+    "score10": 3.43,
     "tier": "\u2717   AVOID"
   },
   {
     "stock": "COFORGE",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Coforge Limited",
+    "sector": "Technology",
+    "cap_class": "Large",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -9971,7 +9971,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.88,
+    "score10": 3.22,
     "tier": "\u2717   AVOID"
   },
   {
@@ -10039,9 +10039,9 @@
   },
   {
     "stock": "NIBE",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Nibe Limited",
+    "sector": "Industrials",
+    "cap_class": "Small",
     "pattern": "PocketPivot",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -10055,14 +10055,14 @@
     "t3_eta": "2026-07-17",
     "status": "Pocket Pivot",
     "added_date": "2026-05-23",
-    "score10": 4.83,
+    "score10": 4.03,
     "tier": "\u2605   WATCH"
   },
   {
     "stock": "HUDCO",
-    "name": "Housing and Urban Development Corporation Limited",
-    "sector": "Financial Services",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "FallingWedge",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -10076,7 +10076,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 5.37,
+    "score10": 4.47,
     "tier": "\u2605   WATCH"
   },
   {
@@ -10181,7 +10181,7 @@
     "t3_eta": "2026-07-17",
     "status": "Pocket Pivot",
     "added_date": "2026-05-23",
-    "score10": 4.47,
+    "score10": 4.77,
     "tier": "\u2605   WATCH"
   },
   {
@@ -10207,9 +10207,9 @@
   },
   {
     "stock": "FIVESTAR",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "Five-Star Business Finance Limited",
+    "sector": "Financial Services",
+    "cap_class": "Mid",
     "pattern": "FallingWedge",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -10223,7 +10223,7 @@
     "t3_eta": "2026-08-21",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 2.88,
+    "score10": 2.38,
     "tier": "\u2717   AVOID"
   },
   {
@@ -10244,14 +10244,14 @@
     "t3_eta": "2026-08-28",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 7.78,
+    "score10": 7.48,
     "tier": "\u2605\u2605\u2605 BUY STRONG"
   },
   {
     "stock": "RATEGAIN",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "RateGain Travel Technologies Limited",
+    "sector": "Technology",
+    "cap_class": "Mid",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-28",
@@ -10265,8 +10265,8 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 7.47,
-    "tier": "\u2605\u2605\u2605 BUY STRONG"
+    "score10": 6.75,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "SANGHVIMOV",
@@ -10286,7 +10286,7 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 7.47,
+    "score10": 7.17,
     "tier": "\u2605\u2605\u2605 BUY STRONG"
   },
   {
@@ -10307,7 +10307,7 @@
     "t3_eta": "2026-06-09",
     "status": "Burst Active",
     "added_date": "2026-05-23",
-    "score10": 7.33,
+    "score10": 7.03,
     "tier": "\u2605\u2605\u2605 BUY STRONG"
   },
   {
@@ -10316,9 +10316,9 @@
     "sector": "Industrials",
     "cap_class": "Mid",
     "pattern": "CupHandle",
-    "timeframe": "Medium-Long (3-6m)",
-    "pattern_formed": "2026-01-22",
-    "formation_days": 80,
+    "timeframe": "Medium (2-3m)",
+    "pattern_formed": "2026-02-20",
+    "formation_days": 60,
     "breakout_zone": 361.93,
     "stop_loss": 316.07,
     "target_1": 408.65,
@@ -10328,8 +10328,8 @@
     "t3_eta": "2026-08-28",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 7.27,
-    "tier": "\u2605\u2605\u2605 BUY STRONG"
+    "score10": 6.97,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "MCX",
@@ -10354,9 +10354,9 @@
   },
   {
     "stock": "THYROCARE",
-    "name": "Thyrocare Technologies Limited",
-    "sector": "Healthcare",
-    "cap_class": "Mid",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "DoubleBottom",
     "timeframe": "Long-term (6m+)",
     "pattern_formed": "2025-07-29",
@@ -10370,14 +10370,14 @@
     "t3_eta": "2026-09-11",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 7.18,
-    "tier": "\u2605\u2605\u2605 BUY STRONG"
+    "score10": 6.77,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "KRISHNADEF",
-    "name": null,
-    "sector": null,
-    "cap_class": "Unknown",
+    "name": "KRISHNA DEF AND ALD IND L",
+    "sector": "Industrials",
+    "cap_class": "Small",
     "pattern": "InvHS",
     "timeframe": "Medium (2-3m)",
     "pattern_formed": "2026-02-19",
@@ -10391,7 +10391,7 @@
     "t3_eta": "2026-10-09",
     "status": "Forming",
     "added_date": "2026-05-23",
-    "score10": 7.12,
+    "score10": 7.45,
     "tier": "\u2605\u2605\u2605 BUY STRONG"
   },
   {
@@ -10438,9 +10438,9 @@
   },
   {
     "stock": "MTARTECH",
-    "name": "MTAR Technologies Limited",
-    "sector": "Industrials",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "MomBurst",
     "timeframe": "Short-term (1-6w)",
     "pattern_formed": "2026-04-08",
@@ -10454,14 +10454,14 @@
     "t3_eta": "2026-06-09",
     "status": "Burst Active",
     "added_date": "2026-05-23",
-    "score10": 7.08,
-    "tier": "\u2605\u2605\u2605 BUY STRONG"
+    "score10": 6.67,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "PREMIERENE",
-    "name": "PREMIER ENERGIES LIMITED",
-    "sector": "Technology",
-    "cap_class": "Large",
+    "name": null,
+    "sector": null,
+    "cap_class": "Unknown",
     "pattern": "CupHandle",
     "timeframe": "Medium-Long (3-6m)",
     "pattern_formed": "2025-11-25",
@@ -10475,8 +10475,8 @@
     "t3_eta": "2026-08-28",
     "status": "Breakout Ready",
     "added_date": "2026-05-23",
-    "score10": 7.07,
-    "tier": "\u2605\u2605\u2605 BUY STRONG"
+    "score10": 6.47,
+    "tier": "\u2605\u2605  BUY MODERATE"
   },
   {
     "stock": "MOTHERSON",
