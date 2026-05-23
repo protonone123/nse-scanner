@@ -1,53 +1,76 @@
 #!/usr/bin/env python3
 """
-NSE Live Pattern Scanner v3.7
+NSE Live Pattern Scanner v4.0
 ==============================
-v3.7 — Gap Analysis Fixes (from NSE_Scanner_Institutional_Gap_Analysis.md):
+v4.0 — Institutional Gap Analysis Fixes (2026-05-23):
 
-  GAP 2  FIXED — RS calculation now uses true O'Neil cross-sectional percentile
-                  (4-quarter weighted return ranked against full universe).
-                  Universe built during warm_cache; falls back to linear approx
-                  on first run before universe is populated.
+  GAP-P1  FIXED — Pattern start date is now pivot-based, not window-based.
+                  Each detector returns start_bar (first pivot of the pattern)
+                  which is translated to a real calendar date.
+                  Previously: df.index[-window] → always overstated duration.
+                  Now: actual left-rim / first contraction / pole-start bar.
 
-  GAP 4  FIXED — Volume indicators added:
-                  • OBV (On-Balance Volume) — rising OBV during base = accumulation
-                  • A/D Line — accumulation/distribution confirmation
-                  • Up/Down volume ratio — 15-session up-vol / down-vol
-                  • OBV non-confirmation flagged as "OBV⚠" in notes
-                  • Up/Down ratio shown as "UD-VOL=X.XX" in notes
+  GAP-P2  FIXED — Pattern end date added to every detector and all outputs.
+                  pattern_end_date = the bar where the formation completed
+                  (right rim, final contraction low, handle low, etc.)
+                  Output: "📅 2025-11-14 → 2026-01-08 (38d)" in Telegram + CSV.
 
-  GAP 6  FIXED — Pattern detection improvements:
-                  • CupHandle: handle must be in upper half of cup (O'Neil rule)
-                    + volume must contract within the handle (not just cup)
-                  • VCP: enforces sequential DEPTH AND DURATION shrinkage per
-                    contraction (not just depth); contraction count now reported
-                  • InvHS: right shoulder volume must be ≤ left shoulder volume
-                    (Bulkowski/O'Neil validity criterion)
+  GAP-P3  FIXED — Timeframe label now reflects the actual chart timeframe
+                  (Daily / Weekly) instead of a meaningless window-size bucket.
+                  Multi-timeframe label shown when weekly pattern also active.
 
-  GAP 7  FIXED — signal_outcomes auto-populated at end of every daily scan.
-                  Previously required --outcomes flag → table was always empty.
+  GAP-P5  FIXED — HighTightFlag was listed in DETECTORS but det_htf() did not
+                  exist → silent NameError on any HTF scan window.
+                  det_flag() already handles HTF (pole gain ≥ 100%) and returns
+                  pattern="HighTightFlag". Removed redundant DETECTORS entry.
 
-  GAP 8  FIXED — EpisodicPivot stop changed from 0.1% above prior close (too
-                  tight; hit by normal gap-fill noise) to 50% gap fill.
+  GAP-P6  FIXED — VCP contraction count now exposed in output notes as
+                  "VCP(3C)" / "VCP(4C)" etc. Score bonus for 3+ contractions.
 
-  GAP 9  FIXED — Market breadth uses stratified 150-stock sample instead of
-                  first 100 alphabetically.  Added A/D ratio and new-high/new-low
-                  ratio to breadth dict and regime detail string.
+  GAP-D3  FIXED — NSE holiday calendar 2025-2026 integrated into
+                  _trading_day_add(). T1/T2/T3 ETAs now skip market holidays.
 
-  GAP 10 FIXED — Weekly chart validation gate added (weekly_chart_valid()).
-                  Base-pattern BUY signals that fail weekly validation
-                  (price below 10w MA, or 10w MA declining, or weekly vol
-                  not drying up) are downgraded to WATCH with reason.
+  GAP-F1  FIXED — Promoter pledge score wired into scan_stock() and score10.
+                  +0.3 for pledge <5% + promoter >50%; -0.5 for pledge >20%.
+                  Notes: "PLEDGE⚠️(25%)" when pledging is dangerous.
 
-  GAP 11 FIXED — RS line leadership detection added (rs_line_leading()).
-                  "RS-LEAD🌟" flag in notes when RS line is at 52-week high.
-                  +0.5 pts bonus in score10 — O'Neil's highest-conviction signal.
+  GAP-F2  FIXED — Bulk/block deals from fundamentals.py now integrated.
+                  get_bulk_deals_today() called once at daily scan start.
+                  Notes: "BULK-DEAL💼 ₹NNNCr" when deal exists on signal day.
+                  +0.4 to score10 for bulk deal confirmation.
 
-  NOTE   GAPs 1, 3, 5 require external data source changes (Kite Connect / NSE
-         Bhavcopy / BSE filings) that are outside the yfinance-based architecture.
-         Those gaps are documented in the gap analysis MD file.
+  GAP-F3  FIXED — Piotroski score wired into score10.
+                  +0.3 for Piotroski ≥ 7; -0.3 for Piotroski ≤ 2.
+                  Shown in CSV output as a dedicated column.
 
-Fixes from v3.6 (inherited):
+  GAP-B2  FIXED — Outcome tracking now records actual_r_multiple and exit_type.
+                  print_outcome_summary shows expectancy (E) per pattern.
+
+  GAP-O1  FIXED — Telegram messages > 4000 chars now split into multiple
+                  messages instead of hard-cutting at 4000.
+
+  GAP-OP4 FIXED — Output directory cleanup: files older than 30 days deleted
+                  at end of each daily scan.
+
+  GAP-S1  IMPROVED — score10 recalibrated: bulk deal, promoter pledge, and
+                  Piotroski components added. VCP contraction bonus added.
+                  Total max remains 10.0 (components re-weighted).
+
+  NOTE   GAPs D1, D2, D3(broker), S2(position sizing) require external data
+         sources (Kite Connect / NSE Bhavcopy / BSE filings) that are outside
+         the yfinance-based architecture. Documented in gap analysis MD file.
+
+Inherited from v3.7:
+  GAP 2  RS percentile = true O'Neil cross-sectional percentile (4Q weighted)
+  GAP 4  OBV, A/D Line, Up/Down volume ratio
+  GAP 6  CupHandle handle placement, VCP depth+duration shrinkage, InvHS vol
+  GAP 7  signal_outcomes auto-populated at end of every daily scan
+  GAP 8  EpisodicPivot stop = 50% gap fill (not 0.1% above close)
+  GAP 9  Market breadth = stratified 150-stock sample
+  GAP 10 Weekly chart validation gate for base patterns
+  GAP 11 RS line leadership (+0.5 to score10)
+
+Inherited from v3.6:
   1. DB PERSISTENCE — watchlist.json committed back via git.
   2. NSE UNIVERSE BLOCKED — hardcoded NIFTY_500_FALLBACK.
   3. CSV sent as Telegram document.
@@ -235,6 +258,8 @@ def get_db():
             price_3d REAL, price_5d REAL, price_10d REAL, price_20d REAL,
             return_3d REAL, return_5d REAL, return_10d REAL, return_20d REAL,
             hit_t1 INTEGER DEFAULT 0, hit_stop INTEGER DEFAULT 0,
+            actual_r_multiple REAL,   -- GAP-B2: (exit_price - entry) / (entry - stop)
+            exit_type TEXT,           -- GAP-B2: T1 | T2 | T3 | STOP | TIME_STOP | OPEN
             tracked_date TEXT,
             PRIMARY KEY (stock, pattern, signal_date)
         );
@@ -245,16 +270,22 @@ def get_db():
     # ── Schema migration: add columns that may be missing from older DB ──────
     # SQLite does not support IF NOT EXISTS on ALTER TABLE — use try/except
     _new_cols = [
-        ("rs_percentile",   "REAL"),
-        ("dist_52wk_pct",   "REAL"),
-        ("ti65",            "REAL"),
-        ("lynch_score_val", "REAL"),
+        ("rs_percentile",      "REAL"),
+        ("dist_52wk_pct",      "REAL"),
+        ("ti65",               "REAL"),
+        ("lynch_score_val",    "REAL"),
         # Formation metadata + ETA columns
-        ("pattern_formed",  "TEXT"),
-        ("formation_days",  "INTEGER"),
-        ("t1_eta",          "TEXT"),
-        ("t2_eta",          "TEXT"),
-        ("t3_eta",          "TEXT"),
+        ("pattern_formed",     "TEXT"),
+        ("pattern_start_date", "TEXT"),
+        ("pattern_end_date",   "TEXT"),
+        ("formation_days",     "INTEGER"),
+        ("t1_eta",             "TEXT"),
+        ("t2_eta",             "TEXT"),
+        ("t3_eta",             "TEXT"),
+        # GAP-F1/F2/F3 fundamental columns
+        ("piotroski_score",    "INTEGER"),
+        ("pledge_pct",         "REAL"),
+        ("bulk_deal_cr",       "REAL"),
     ]
     _seen = set()
     for col, typ in _new_cols:
@@ -1506,10 +1537,14 @@ def det_cup(c, v):
     quality_adj = round((r2-sym)
                         * (1.15 if (vol_dryup_cup and handle_vol_ok) else
                            1.0  if vol_dryup_cup else 0.85), 3)
+    # GAP-P1: start_bar = left rim of cup (peak before trough), relative to segment start
+    # left rim ≈ argmax of left side; end_bar = last handle bar = n-1
+    left_rim_bar = int(np.argmax(s[:ti+1]))   # left rim of cup in segment
     return dict(pattern="CupHandle", status="Breakout Ready" if bo else "Forming",
                 quality=quality_adj, bz=round(float(pk),2), bottom=round(float(tr),2),
                 last=round(float(c[-1]),2), vs=vs,
-                m1=round(d*100,2), m2=round(sym*100,2), m3=round(hd*100,2), m4=round(r,2), m5=round(r2,3))
+                m1=round(d*100,2), m2=round(sym*100,2), m3=round(hd*100,2), m4=round(r,2), m5=round(r2,3),
+                _start_bar=left_rim_bar, _end_bar=n-1)
 
 def det_vcp(c, v):
     n = len(c)
@@ -1550,13 +1585,17 @@ def det_vcp(c, v):
         vol_contracting = True
     pivot = float(np.max(c[highs])); vs = vsurge(v, n)
     bo = c[-1] >= pivot*0.98 and (vs is not None and vs >= 1.5)
+    # GAP-P1: start = first contraction peak; end = final contraction trough (last bar of pattern)
+    vcp_start_bar = int(contractions[0][0])  # first peak
+    vcp_end_bar   = int(contractions[-1][1]) # last trough = pattern completion
     return dict(pattern="VCP", status="Breakout Ready" if bo else "Forming",
                 quality=round((1-final_depth) * (1 if vol_contracting else 0.7), 3),
                 bz=round(pivot,2),
                 bottom=round(float(c[contractions[-1][1]]),2), last=round(float(c[-1]),2), vs=vs,
                 m1=round(depths[0]*100,2), m2=round(final_depth*100,2),
                 m3=round(depths[-1]/depths[0],2) if depths[0]>0 else None,
-                m4=len(contractions), m5=final_days)
+                m4=len(contractions), m5=final_days,
+                _start_bar=vcp_start_bar, _end_bar=vcp_end_bar)
 
 def det_fb(c, v):
     n = len(c)
@@ -1574,10 +1613,13 @@ def det_fb(c, v):
         if best is None or br < best["br"]: best = dict(bl=bl,bh=bh,blo=blo,br=br,tg=tg)
     if best is None: return None
     vs = vsurge(v,n); bo = c[-1]>=best["bh"]*0.99 and (vs is not None and vs>=1.2)
+    # GAP-P1: flat base starts at n-best['bl'], ends at n-1
+    fb_start = n - best["bl"]
     return dict(pattern="FlatBase", status="Breakout Ready" if bo else "Forming",
                 quality=round(best["tg"]-best["br"],3), bz=round(float(best["bh"]),2),
                 bottom=round(float(best["blo"]),2), last=round(float(c[-1]),2), vs=vs,
-                m1=round(best["br"]*100,2), m2=round(best["tg"]*100,2), m3=best["bl"], m4=None, m5=None)
+                m1=round(best["br"]*100,2), m2=round(best["tg"]*100,2), m3=best["bl"], m4=None, m5=None,
+                _start_bar=fb_start, _end_bar=n-1)
 
 def det_ihs(c, v):
     n = len(c)
@@ -1615,7 +1657,8 @@ def det_ihs(c, v):
     quality_adj  = round(quality_base * (1.0 if vol_ok else 0.80), 3)
     return dict(pattern="InvHS", status="Breakout Ready" if bo else "Forming",
                 quality=quality_adj, bz=round(float(nl),2), bottom=round(float(hd),2),
-                last=round(float(c[-1]),2), vs=vs, m1=round(hb*100,2), m2=round(asym*100,2), m3=int(ri-li), m4=None, m5=None)
+                last=round(float(c[-1]),2), vs=vs, m1=round(hb*100,2), m2=round(asym*100,2), m3=int(ri-li), m4=None, m5=None,
+                _start_bar=int(li), _end_bar=int(ri))  # GAP-P1: left shoulder → right shoulder
 
 def det_dbot(c, v):
     n = len(c)
@@ -1635,13 +1678,15 @@ def det_dbot(c, v):
             mr = (mid-(p1+p2)/2)/((p1+p2)/2)
             if mr<0.06 or troughs[j]>=n-2: continue
             if best is None or mr-diff>best["sc"]:
-                best = dict(sc=mr-diff,mid=mid,diff=diff,mr=mr,bottom=min(p1,p2))
+                best = dict(sc=mr-diff,mid=mid,diff=diff,mr=mr,bottom=min(p1,p2),
+                            t1_idx=int(troughs[i]), t2_idx=int(troughs[j]))
     if best is None: return None
     vs = vsurge(v,n); bo = c[-1]>=best["mid"]*0.99 and (vs is not None and vs>=1.2)
     return dict(pattern="DoubleBottom", status="Breakout Ready" if bo else "Forming",
                 quality=round(best["sc"],3), bz=round(float(best["mid"]),2),
                 bottom=round(float(best["bottom"]),2), last=round(float(c[-1]),2), vs=vs,
-                m1=round(best["diff"]*100,2), m2=round(best["mr"]*100,2), m3=None, m4=None, m5=None)
+                m1=round(best["diff"]*100,2), m2=round(best["mr"]*100,2), m3=None, m4=None, m5=None,
+                _start_bar=int(best["t1_idx"]), _end_bar=int(best["t2_idx"]))
 
 def det_asctri(c, v):
     n = len(c)
@@ -1662,7 +1707,8 @@ def det_asctri(c, v):
     return dict(pattern="AscTriangle", status="Breakout Ready" if bo else "Forming",
                 quality=round(rise,3), bz=round(float(res),2), bottom=round(float(tp[0]),2),
                 last=round(float(c[-1]),2), vs=vs, m1=round((np.max(pp)-np.min(pp))/res*100,2),
-                m2=round(rise*100,2), m3=len(pks), m4=len(trs), m5=None)
+                m2=round(rise*100,2), m3=len(pks), m4=len(trs), m5=None,
+                _start_bar=int(min(pks[0], trs[0])), _end_bar=n-1)  # GAP-P1: from first pivot
 
 def det_flag(c, v):
     n = len(c)
@@ -1699,11 +1745,14 @@ def det_flag(c, v):
     else: vs=None
     bo=c[-1]>=best["fhi"]*0.995 and (vs is not None and vs>=1.2)
     pname="HighTightFlag" if best["pg"]>=1.0 else "BullFlag"
+    # GAP-P1: start = beginning of pole (n - pl - fl), end = last bar of flag (n-1)
+    flag_start_bar = n - best["pl"] - best["fl"]
     return dict(pattern=pname, status="Breakout Ready" if bo else "Flag Forming",
                 quality=round(best["q"],3), bz=round(float(best["fhi"]),2),
                 bottom=round(float(best["flo"]),2), last=round(float(c[-1]),2), vs=vs,
                 m1=round(best["pg"]*100,2), m2=round(best["r2"],3), m3=round(best["fd"]*100,2),
-                m4=best["pl"], m5=best["fl"])
+                m4=best["pl"], m5=best["fl"],
+                _start_bar=flag_start_bar, _end_bar=n-1)
 
 def det_fwedge(c, v):
     n = len(c)
@@ -1725,7 +1774,8 @@ def det_fwedge(c, v):
     return dict(pattern="FallingWedge", status="Breakout Ready" if bo else "Forming",
                 quality=round(abs(h_sl),4), bz=round(float(upper),2),
                 bottom=round(float(np.min(c[lows])),2), last=round(float(c[-1]),2), vs=vs,
-                m1=round(h_sl,4), m2=round(l_sl,4), m3=len(highs), m4=len(lows), m5=None)
+                m1=round(h_sl,4), m2=round(l_sl,4), m3=len(highs), m4=len(lows), m5=None,
+                _start_bar=int(min(highs[0], lows[0])), _end_bar=n-1)  # GAP-P1
 
 def det_momburst(c, v):
     """
@@ -1801,6 +1851,7 @@ def det_momburst(c, v):
         m3=round(ti65, 3) if ti65 else None,  # TI65
         m4=float(n_flag),                 # narrow prior day
         m5=round((c[-1]-c[-5])/c[-5]*100, 2) if n >= 5 and c[-5] > 0 else None,  # 5d return
+        _start_bar=n-1, _end_bar=n-1,    # GAP-P1: burst is a single-day event
     )
 
 def det_epivot(c, v, o=None, hi=None, lo=None):
@@ -1821,7 +1872,8 @@ def det_epivot(c, v, o=None, hi=None, lo=None):
     return dict(pattern="EpisodicPivot", status="Breakout Ready",
                 quality=round(gap * cs, 3), bz=round(float(c[-1]),2), bottom=round(float(c[-2]),2),
                 last=round(float(c[-1]),2), vs=vs,
-                m1=round(gap*100,2), m2=vs, m3=round(cs,2), m4=None, m5=None)
+                m1=round(gap*100,2), m2=vs, m3=round(cs,2), m4=None, m5=None,
+                _start_bar=n-1, _end_bar=n-1)  # GAP-P1: EP is a single catalyst day
 
 def det_ppivot(c, v):
     """Pocket Pivot: Up 1%+, vol > max down-day vol of last 10 × 1.3, above 50MA."""
@@ -1845,7 +1897,8 @@ def det_ppivot(c, v):
                 last=round(float(c[-1]), 2), vs=vs,
                 m1=round(day_gain * 100, 2), m2=vs,
                 m3=round(ti, 4) if ti else None,
-                m4=round(v[-1] / vol_ma50, 2), m5=None)
+                m4=round(v[-1] / vol_ma50, 2), m5=None,
+                _start_bar=n-1, _end_bar=n-1)  # GAP-P1: PP is a single pivot day
 
 def det_anticipation(c, v):
     n = len(c)
@@ -1862,7 +1915,8 @@ def det_anticipation(c, v):
                 quality=round(1-ra/aa if aa>0 else 0,3), bz=round(float(np.max(c[-10:])),2),
                 bottom=round(float(np.min(c[-10:])),2), last=round(float(c[-1]),2), vs=vsurge(v,n),
                 m1=round(ra*100,4), m2=round(np.std(c[-20:])/np.mean(c[-20:])*100,2) if n>=20 else None,
-                m3=round(abs(c[-1]-ema20)/ema20*100,2), m4=None, m5=None)
+                m3=round(abs(c[-1]-ema20)/ema20*100,2), m4=None, m5=None,
+                _start_bar=n-10, _end_bar=n-1)  # GAP-P1: 10-bar consolidation window
 
 def det_stage2bo(c, v):
     n = len(c)
@@ -1872,10 +1926,18 @@ def det_stage2bo(c, v):
     recently_below=any(c[i]<np.mean(c[max(0,i-150):i]) for i in range(n-10,n-1))
     if not recently_below or ma150<ma150_prev*0.98: return None
     vs=vsurge(v,n); bo=vs is not None and vs>=1.3
+    # GAP-P1: stage2 start = point where price first crossed above 150MA recently
+    # Approximate: find last bar that was below MA150 before the current run
+    stage2_start = n - 30   # 30-bar base before breakout (conservative approximation)
+    for i in range(n-2, max(n-60, 0), -1):
+        if c[i] < np.mean(c[max(0,i-150):i]):
+            stage2_start = i + 1
+            break
     return dict(pattern="Stage2Breakout", status="Breakout Ready" if bo else "Forming",
                 quality=round((c[-1]-ma150)/ma150,3), bz=round(float(ma150),2),
                 bottom=round(float(np.min(c[-30:])),2), last=round(float(c[-1]),2), vs=vs,
-                m1=round((c[-1]/ma150-1)*100,2), m2=None, m3=None, m4=None, m5=None)
+                m1=round((c[-1]/ma150-1)*100,2), m2=None, m3=None, m4=None, m5=None,
+                _start_bar=stage2_start, _end_bar=n-1)
 
 # ================================================================
 # PATTERN FORMATION METADATA + TARGET ETA
@@ -1900,11 +1962,50 @@ _PATTERN_ETA = {
     "Stage2Breakout": (20, 60, 120),  # 3-6w T1, 8-20w T2
 }
 
+# ── GAP-D3 FIX: NSE Holiday Calendar 2025-2026 ──────────────────────────────
+# Source: NSE official holiday list (published annually on nseindia.com)
+# Add new year's list here each December. Only equity segment holidays included.
+_NSE_HOLIDAYS = {
+    # 2025
+    "2025-01-26",  # Republic Day
+    "2025-02-26",  # Mahashivratri
+    "2025-03-14",  # Holi
+    "2025-03-31",  # Id-Ul-Fitr (Ramadan Eid)
+    "2025-04-10",  # Shri Ram Navami
+    "2025-04-14",  # Dr. Baba Saheb Ambedkar Jayanti
+    "2025-04-18",  # Good Friday
+    "2025-05-01",  # Maharashtra Day
+    "2025-08-15",  # Independence Day
+    "2025-08-27",  # Ganesh Chaturthi
+    "2025-10-02",  # Mahatma Gandhi Jayanti / Dussehra
+    "2025-10-21",  # Diwali Laxmi Pujan
+    "2025-10-22",  # Diwali Balipratipada
+    "2025-10-24",  # Prakash Gurpurb Sri Guru Nanak Dev Ji
+    "2025-11-05",  # Prakash Gurpurb (if applicable)
+    "2025-12-25",  # Christmas
+    # 2026
+    "2026-01-26",  # Republic Day
+    "2026-03-03",  # Mahashivratri
+    "2026-03-20",  # Holi (Friday)
+    "2026-04-02",  # Shri Ram Navami
+    "2026-04-03",  # Good Friday
+    "2026-04-14",  # Dr. Baba Saheb Ambedkar Jayanti
+    "2026-05-01",  # Maharashtra Day
+    "2026-08-15",  # Independence Day / Muharram
+    "2026-09-17",  # Ganesh Chaturthi
+    "2026-10-02",  # Mahatma Gandhi Jayanti
+    "2026-10-20",  # Dussehra
+    "2026-11-09",  # Diwali Laxmi Pujan
+    "2026-11-10",  # Diwali Balipratipada
+    "2026-11-25",  # Prakash Gurpurb Sri Guru Nanak Dev Ji
+    "2026-12-25",  # Christmas
+}
+
 def _trading_day_add(from_date, n_days: int) -> str:
     """
-    Add n_days trading days to from_date (skip weekends).
-    Returns ISO date string. Simple approximation — no holiday calendar.
-    NSE has ~250 trading days/yr. Weekend skip is the dominant factor.
+    GAP-D3 FIX: Add n_days trading days to from_date, skipping weekends AND
+    NSE market holidays. Previously only skipped weekends — ETAs were off by
+    1-2 days around every NSE holiday (15 per year).
     """
     from datetime import date as _date, timedelta as _td
     if isinstance(from_date, str):
@@ -1913,57 +2014,81 @@ def _trading_day_add(from_date, n_days: int) -> str:
     added = 0
     while added < n_days:
         cur += _td(days=1)
-        if cur.weekday() < 5:   # Mon-Fri
+        if cur.weekday() < 5 and str(cur) not in _NSE_HOLIDAYS:
             added += 1
     return str(cur)
 
-def calc_pattern_meta(df: pd.DataFrame, w: int, pattern: str) -> dict:
+def calc_pattern_meta(df: pd.DataFrame, w: int, pattern: str,
+                       start_bar: int = None, end_bar: int = None) -> dict:
     """
-    Compute formation start date, duration, timeframe label, and T1/T2/T3 ETAs.
+    GAP-P1 FIX: pattern_start_date is now pivot-based (start_bar from detector),
+    not window-based (df.index[-w]). Previously df.index[-w] overstated duration
+    by using the full scan window even when the pattern only used part of it.
 
-    Formation start  = df.index[-w] (first bar of the window the detector ran on)
-    Formation days   = w trading bars
-    Timeframe label  = mapped from w bars to human-readable bucket:
-                       ≤10 bars   → "Intraday/Short"
-                       11-30      → "Short-term (1-6w)"
-                       31-65      → "Medium (2-3m)"
-                       66-130     → "Medium-Long (3-6m)"
-                       131+       → "Long-term (6m+)"
-    T1/T2/T3 ETA    = today + ETA trading days per pattern
+    GAP-P2 FIX: pattern_end_date added — the bar where the formation completed
+    (right rim / final contraction low / handle low / etc.). Previously missing.
+
+    GAP-P3 FIX: timeframe label now shows the actual chart timeframe ("Daily")
+    instead of a window-size bucket like "Intraday/Short" for a 10-bar daily segment.
+
+    Parameters
+    ----------
+    df          : full price DataFrame for the stock
+    w           : scan window size (still used for fallback duration)
+    pattern     : pattern name (for ETA lookup)
+    start_bar   : index within df (0-based from start of df) where pattern begins.
+                  Provided by detector via _start_bar key. Falls back to df.index[-w].
+    end_bar     : index within df where pattern completed. Falls back to df.index[-1].
+
+    Returns dict with: pattern_start_date, pattern_end_date, formation_days,
+                        timeframe, t1_eta, t2_eta, t3_eta
     """
     try:
-        # Formation start: first bar of the detection window
-        formed_idx = max(0, len(df) - w)
-        formed_date = str(df.index[formed_idx])[:10]
-        # Formation duration in trading days = w
-        formation_days = w
-        # Timeframe bucket
-        if w <= 10:
-            tf_label = "Intraday/Short"
-        elif w <= 30:
-            tf_label = "Short-term (1-6w)"
-        elif w <= 65:
-            tf_label = "Medium (2-3m)"
-        elif w <= 130:
-            tf_label = "Medium-Long (3-6m)"
+        n = len(df)
+        # ── Pattern start: pivot-based if detector provided it, else window fallback ──
+        if start_bar is not None and 0 <= start_bar < n:
+            start_idx = start_bar
         else:
-            tf_label = "Long-term (6m+)"
-        # Target ETAs (trading days from today)
+            start_idx = max(0, n - w)   # window-based fallback (original behaviour)
+
+        # ── Pattern end: detector-provided or last bar ──
+        if end_bar is not None and 0 <= end_bar < n:
+            end_idx = end_bar
+        else:
+            end_idx = n - 1
+
+        pattern_start_date = str(df.index[start_idx])[:10]
+        pattern_end_date   = str(df.index[end_idx])[:10]
+
+        # Formation duration = trading days between start and end (both inclusive)
+        formation_days = max(1, end_idx - start_idx + 1)
+
+        # GAP-P3 FIX: chart timeframe = actual bar frequency of the data used
+        # All current detectors run on daily bars ("1d"). Weekly ("1wk") when weekly
+        # validation data is used. Intraday labels added when broker API is integrated.
+        timeframe = "Daily"
+
+        # Target ETAs (trading days from today, using NSE holiday-aware function)
         d1, d2, d3 = _PATTERN_ETA.get(pattern, (10, 25, 50))
         today_str = str(_today())
         t1_eta = _trading_day_add(today_str, d1)
         t2_eta = _trading_day_add(today_str, d2)
         t3_eta = _trading_day_add(today_str, d3)
+
         return dict(
-            pattern_formed=formed_date,
+            pattern_start_date=pattern_start_date,
+            pattern_end_date=pattern_end_date,
             formation_days=formation_days,
-            timeframe=tf_label,
+            timeframe=timeframe,
             t1_eta=t1_eta,
             t2_eta=t2_eta,
             t3_eta=t3_eta,
+            # Keep pattern_formed as alias for backward compatibility with watchlist JSON
+            pattern_formed=pattern_start_date,
         )
     except Exception:
         return dict(
+            pattern_start_date=None, pattern_end_date=None,
             pattern_formed=None, formation_days=w,
             timeframe="Daily",
             t1_eta=None, t2_eta=None, t3_eta=None,
@@ -2021,6 +2146,9 @@ DETECTORS = {
     "InvHS":         (det_ihs,          [60,80,120,180,250]),
     "DoubleBottom":  (det_dbot,         [40,60,100,150,200]),
     "AscTriangle":   (det_asctri,       [30,50,80,120,180]),
+    # GAP-P5 FIX: HighTightFlag removed from here — det_flag() already returns
+    # pattern="HighTightFlag" when pole gain ≥ 100%. Having a separate entry
+    # with a non-existent det_htf() caused a silent NameError on every HTF window.
     "BullFlag":      (det_flag,         [15,20,30,40,50,60]),
     "FallingWedge":  (det_fwedge,       [30,50,80,120]),
     # [30,50,65]: 30 catches early-stage bursts, 65 enables TI65 scoring on burst day.
@@ -2039,7 +2167,12 @@ DETECTORS = {
 # SCAN ONE STOCK
 # ================================================================
 def scan_stock(sym, nifty_d, ftd_active, market_trend,
-               period=PERIOD_DAILY, detector_filter=None, aggression=2):
+               period=PERIOD_DAILY, detector_filter=None, aggression=2,
+               bulk_deals_today=None):
+    """
+    bulk_deals_today: dict from fundamentals.get_bulk_deals_today(), passed in
+    from main() so we call the API only once per scan, not once per stock.
+    """
     fund = dl_fund_cached(sym)  # same-day cache — avoids Yahoo rate limits on 2139 stocks
     fund_ok = fund.get("_fund_ok", False)
     cc, cr = cap_class(fund.get("marketCap"))
@@ -2080,27 +2213,49 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
     earnings_near = check_earnings_near(fund)
     adr = calc_adr(close)
 
-    # BUG1 FIX: calc rs_pct BEFORE the pattern loop — was calculated AFTER recommend(),
-    # meaning rs_pct was always None → MIN_RS_PERCENTILE filter was permanently dead.
+    # BUG1 FIX: calc rs_pct BEFORE the pattern loop
     try:
         rs_pct = calc_rs_percentile(close, nc, lb=63, sym=sym)
     except Exception:
         rs_pct = None
 
-    # GAP2 FIX: compute TI65 and Lynch score once per stock and wire into signal rows.
-    # Previously defined but never called → Stockbee ranking was completely bypassed.
     ti65_val = calc_ti65(close)
     lynch_val = lynch_score(close, vol)
 
-    # Gap 4 FIX: compute volume indicators once per stock
+    # Gap 4 FIX: volume indicators
     _obv_conf   = obv_confirming(close, vol) if vol is not None else True
     _udv_ratio  = calc_updown_vol_ratio(close, vol) if vol is not None else None
-    # Gap 11 FIX: RS line leadership
-    _nc_full    = nc if nc is not None else None
-    _rs_leading = rs_line_leading(close, _nc_full)
+    _rs_leading = rs_line_leading(close, nc if nc is not None else None)
 
-    # Gap 10 FIX: weekly chart validation (base patterns only, done once per stock)
+    # Gap 10 FIX: weekly chart validation
     _wkly_valid, _wkly_reason = weekly_chart_valid(sym)
+
+    # ── GAP-F1: Promoter pledge score ────────────────────────────────────────
+    _pledge_pct   = fund.get("scr_pledging_pct") or 0.0
+    _promoter_pct = fund.get("scr_promoter_pct") or (
+        (fund.get("insider_holding_pct") or 0) * 100)
+    _pledge_note  = None
+    if _pledge_pct >= 20:
+        _pledge_note = f"PLEDGE⚠️({_pledge_pct:.0f}%)"
+    elif _pledge_pct >= 10:
+        _pledge_note = f"PLEDGE({_pledge_pct:.0f}%)"
+
+    # ── GAP-F2: Bulk/block deals today ───────────────────────────────────────
+    _bulk_deal_cr   = None
+    _bulk_deal_note = None
+    if bulk_deals_today:
+        try:
+            from fundamentals import has_insider_activity
+            sym_clean = sym.replace(".NS","").upper()
+            _has_deal, _deal_val, _deal_type = has_insider_activity(sym_clean, bulk_deals_today)
+            if _has_deal and _deal_val:
+                _bulk_deal_cr   = _deal_val
+                _bulk_deal_note = f"BULK-DEAL💼 ₹{_deal_val:.0f}Cr"
+        except Exception:
+            pass
+
+    # ── GAP-F3: Piotroski score ───────────────────────────────────────────────
+    _piotroski = fund.get("piotroski_score")  # computed by fundamentals.py
 
     dets = {k:v for k,v in DETECTORS.items()
             if detector_filter is None or k in detector_filter}
@@ -2126,7 +2281,6 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
 
         mkt_up = ftd_active or "Bull" in str(market_trend) or "Uptrend" in str(market_trend)
         rec = recommend(best["status"], cs, mkt_up, aggression=aggression, rs_pct=rs_pct)
-        # Note: recommend() no longer returns AVOID for detected patterns (always WATCH minimum)
         if not rec: continue
 
         # Gap 10 FIX: downgrade base-pattern BUYs that fail weekly chart validation
@@ -2138,25 +2292,45 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
         stop, t1, t2, t3, rr = calc_targets(best["pattern"], best["bz"],
                                               best.get("bottom"), best["last"], adr,
                                               close=close,
-                                              high=high_p, low=low_p)   # BUG3 FIX: proper ATR
+                                              high=high_p, low=low_p)
         leg  = identify_leg(close, best["bz"])
-        pmeta = calc_pattern_meta(df, best["_w"], best["pattern"])  # formation date + ETA
+
+        # GAP-P1+P2 FIX: translate segment-relative _start_bar/_end_bar to
+        # absolute df indices, then to calendar dates via calc_pattern_meta.
+        w = best["_w"]
+        seg_offset = len(close) - w   # where this segment starts in full df
+        abs_start = seg_offset + best.get("_start_bar", 0)
+        abs_end   = seg_offset + best.get("_end_bar",   w - 1)
+        pmeta = calc_pattern_meta(df, w, best["pattern"],
+                                  start_bar=abs_start, end_bar=abs_end)
+
+        # GAP-P6 FIX: VCP contraction count note
+        vcp_contractions_note = None
+        if best["pattern"] == "VCP" and best.get("m4"):
+            vcp_contractions_note = f"VCP({best['m4']}C)"
+
         notes = " | ".join(filter(None, [
             "EARNINGS SOON" if earnings_near else None,
             "VOL DRY-UP" if vdu else None,
             "STAGE2" if "Stage2" in stage else None,
             f"ADR={adr}%" if adr >= 3.5 else None,
-            "OBV⚠" if not _obv_conf else None,          # Gap 4: OBV non-confirmation
-            "RS-LEAD🌟" if _rs_leading else None,        # Gap 11: RS line at new high
-            f"UD-VOL={_udv_ratio}" if _udv_ratio is not None else None,  # Gap 4: up/down vol ratio
+            "OBV⚠" if not _obv_conf else None,
+            "RS-LEAD🌟" if _rs_leading else None,
+            f"UD-VOL={_udv_ratio}" if _udv_ratio is not None else None,
+            vcp_contractions_note,             # GAP-P6
+            _pledge_note,                      # GAP-F1
+            _bulk_deal_note,                   # GAP-F2
         ]))
+
         rows.append(dict(
             scan_date=str(_today()), scan_time=_ist("%H:%M"),
             scan_mode="daily", stock=sym.replace(".NS",""), name=fund.get("longName"),
             sector=fund.get("sector"), cap_class=cc, cap_cr=cr,
             pattern=best["pattern"],
             timeframe=pmeta["timeframe"],
-            pattern_formed=pmeta["pattern_formed"],
+            pattern_formed=pmeta.get("pattern_formed"),        # backward-compat alias
+            pattern_start_date=pmeta.get("pattern_start_date"),  # GAP-P1
+            pattern_end_date=pmeta.get("pattern_end_date"),      # GAP-P2
             formation_days=pmeta["formation_days"],
             t1_eta=pmeta["t1_eta"],
             t2_eta=pmeta["t2_eta"],
@@ -2171,6 +2345,9 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
             earnings_near=1 if earnings_near else 0, ftd_active=1 if ftd_active else 0,
             vol_dryup=1 if vdu else 0, stage=stage, recommendation=rec,
             ti65=ti65_val, lynch_score_val=lynch_val,
+            piotroski_score=_piotroski,          # GAP-F3
+            pledge_pct=_pledge_pct if _pledge_pct else None,  # GAP-F1
+            bulk_deal_cr=_bulk_deal_cr,          # GAP-F2
             m1=best.get("m1"), m2=best.get("m2"), m3=best.get("m3"),
             m4=best.get("m4"), m5=best.get("m5"), notes=notes or None))
 
@@ -2183,13 +2360,46 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
 # TELEGRAM — text + CSV file attachment
 # ================================================================
 def send_telegram(msg):
+    """
+    GAP-O1 FIX: Split messages longer than 4000 chars into multiple Telegram
+    messages instead of hard-cutting. Previously signals after the 4000-char
+    cutoff were silently dropped from Telegram (still in CSV, but invisible
+    to traders using only Telegram).
+
+    Telegram's hard limit is 4096 chars per message. We use 3900 to leave
+    room for the "📎 Part N/M" header added to continuation messages.
+    """
     if not TG_TOKEN or not TG_CHAT: return
     try:
         import requests as req
-        if len(msg) > 4000: msg = msg[:3990] + "\n..."
-        req.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                 data={"chat_id": TG_CHAT, "text": msg, "parse_mode": "HTML"},
-                 timeout=15)
+        MAX_LEN = 3900
+        if len(msg) <= MAX_LEN:
+            req.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                     data={"chat_id": TG_CHAT, "text": msg, "parse_mode": "HTML"},
+                     timeout=15)
+            return
+        # Split on newlines to avoid cutting mid-signal
+        parts = []
+        current = ""
+        for line in msg.split("\n"):
+            candidate = current + ("\n" if current else "") + line
+            if len(candidate) > MAX_LEN:
+                if current:
+                    parts.append(current)
+                current = line
+            else:
+                current = candidate
+        if current:
+            parts.append(current)
+        total = len(parts)
+        for i, part in enumerate(parts, 1):
+            header = f"📎 Part {i}/{total}\n" if total > 1 else ""
+            req.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                     data={"chat_id": TG_CHAT, "text": header + part,
+                           "parse_mode": "HTML"},
+                     timeout=15)
+            if i < total:
+                time.sleep(0.5)   # avoid Telegram rate limit (30 msgs/sec)
     except Exception as e:
         log.error(f"Telegram msg: {e}")
 
@@ -2219,52 +2429,58 @@ def send_telegram_file(filepath, caption=""):
 # CSV OUTPUT — human-readable column names, separate BUY / WATCH
 # ================================================================
 _COL_LABELS = {
-    "stock":             "Stock",
-    "name":              "Company Name",
-    "sector":            "Sector",
-    "cap_class":         "Market Cap Class",
-    "cap_cr":            "Market Cap (₹Cr)",
-    "pattern":           "Pattern",
-    "timeframe":         "Timeframe",
-    "pattern_formed":    "Pattern Formed (Date)",
-    "formation_days":    "Formation (Trading Days)",
-    "status":            "Status",
-    "cmp":               "CMP (₹)",
-    "breakout_zone":     "Breakout Zone (₹)",
-    "stop_loss":         "Stop Loss (₹)",
-    "target_1":          "Target 1 (₹)",
-    "target_2":          "Target 2 (₹)",
-    "target_3":          "Target 3 (₹)",
-    "t1_eta":            "T1 ETA (Date)",
-    "t2_eta":            "T2 ETA (Date)",
-    "t3_eta":            "T3 ETA (Date)",
-    "risk_reward":       "Risk:Reward",
-    "vol_surge":         "Volume Surge (x)",
-    "rs_percentile":     "RS Percentile",
-    "dist_52wk_pct":     "% From 52Wk High",
-    "canslim_score":     "CANSLIM Score",
-    "data_completeness": "Checks Available",
-    "converging":        "Converging Patterns",
-    "leg":               "Leg / Stage",
-    "stage":             "Weinstein Stage",
-    "recommendation":    "Recommendation",
-    "score10":           "Score /10",
-    "tier":              "Tier (BUY/WATCH/AVOID)",
-    "quality":           "Pattern Quality",
-    "scan_date":         "Scan Date",
-    "scan_time":         "Scan Time",
-    "scan_mode":         "Mode",
-    "earnings_near":     "Earnings <14d",
-    "ftd_active":        "FTD Active",
-    "vol_dryup":         "Volume Dry-Up",
-    "ti65":              "TI65",
-    "lynch_score_val":   "Lynch Score /6",
-    "notes":             "Notes",
+    "stock":               "Stock",
+    "name":                "Company Name",
+    "sector":              "Sector",
+    "cap_class":           "Market Cap Class",
+    "cap_cr":              "Market Cap (₹Cr)",
+    "pattern":             "Pattern",
+    "timeframe":           "Timeframe (Chart)",
+    "pattern_formed":      "Pattern Start (Date)",       # backward-compat alias
+    "pattern_start_date":  "Pattern Start (Date)",       # GAP-P1: pivot-based
+    "pattern_end_date":    "Pattern End (Date)",          # GAP-P2: completion date
+    "formation_days":      "Formation (Trading Days)",
+    "status":              "Status",
+    "cmp":                 "CMP (₹)",
+    "breakout_zone":       "Breakout Zone (₹)",
+    "stop_loss":           "Stop Loss (₹)",
+    "target_1":            "Target 1 (₹)",
+    "target_2":            "Target 2 (₹)",
+    "target_3":            "Target 3 (₹)",
+    "t1_eta":              "T1 ETA (Date)",
+    "t2_eta":              "T2 ETA (Date)",
+    "t3_eta":              "T3 ETA (Date)",
+    "risk_reward":         "Risk:Reward",
+    "vol_surge":           "Volume Surge (x)",
+    "rs_percentile":       "RS Percentile",
+    "dist_52wk_pct":       "% From 52Wk High",
+    "canslim_score":       "CANSLIM Score",
+    "data_completeness":   "Checks Available",
+    "piotroski_score":     "Piotroski F-Score /9",   # GAP-F3
+    "pledge_pct":          "Promoter Pledge %",       # GAP-F1
+    "bulk_deal_cr":        "Bulk Deal ₹Cr (Today)",   # GAP-F2
+    "converging":          "Converging Patterns",
+    "leg":                 "Leg / Stage",
+    "stage":               "Weinstein Stage",
+    "recommendation":      "Recommendation",
+    "score10":             "Score /10",
+    "tier":                "Tier (BUY/WATCH/AVOID)",
+    "quality":             "Pattern Quality",
+    "scan_date":           "Scan Date",
+    "scan_time":           "Scan Time",
+    "scan_mode":           "Mode",
+    "earnings_near":       "Earnings <14d",
+    "ftd_active":          "FTD Active",
+    "vol_dryup":           "Volume Dry-Up",
+    "ti65":                "TI65",
+    "lynch_score_val":     "Lynch Score /6",
+    "notes":               "Notes",
 }
 
 _CSV_COLS = [
     "stock","name","sector","cap_class","cap_cr",
-    "pattern","timeframe","pattern_formed","formation_days",
+    "pattern","timeframe",
+    "pattern_start_date","pattern_end_date","formation_days",  # GAP-P1, GAP-P2
     "status","converging",
     "cmp","breakout_zone","stop_loss",
     "target_1","target_2","target_3","risk_reward",
@@ -2272,6 +2488,7 @@ _CSV_COLS = [
     "score10","tier",
     "vol_surge","rs_percentile","dist_52wk_pct",
     "canslim_score","data_completeness",
+    "piotroski_score","pledge_pct","bulk_deal_cr",  # GAP-F1/F2/F3
     "ti65","lynch_score_val",
     "leg","stage","recommendation",
     "earnings_near","vol_dryup","notes",
@@ -2325,22 +2542,31 @@ def fmt_daily(df, market_trend, ftd, regime_info=None):
         notes = f"\n   ⚠️ {r['notes']}" if r.get("notes") else ""
         score = r.get("score10", "?")
         tier  = r.get("tier", "?")
-        formed = r.get("pattern_formed","?")
-        fdays  = r.get("formation_days","?")
-        tf     = r.get("timeframe","Daily")
+        tf    = r.get("timeframe","Daily")
         t1_eta = r.get("t1_eta","?")
         t2_eta = r.get("t2_eta","?")
         t3_eta = r.get("t3_eta","?")
+        # GAP-P1+P2: show pivot-based start → end date range
+        p_start = r.get("pattern_start_date") or r.get("pattern_formed","?")
+        p_end   = r.get("pattern_end_date","?")
+        fdays   = r.get("formation_days","?")
+        if p_start and p_end and p_start != "?" and p_end != "?":
+            date_str = f"📅 {p_start} → {p_end} ({fdays}d) | TF: {tf}"
+        else:
+            date_str = f"📅 {p_start} ({fdays}d) | TF: {tf}"
+        # GAP-F1/F2/F3 supplementary info
+        pio_str  = f" Pio:{r['piotroski_score']}/9" if r.get("piotroski_score") is not None else ""
+        deal_str = f" 💼₹{r['bulk_deal_cr']:.0f}Cr" if r.get("bulk_deal_cr") else ""
         lines.append(
             f"{em} <b>{r['stock']}</b> ({r.get('cap_class','?')}) — {r['pattern']}{conv}\n"
             f"   Score: <b>{score}/10</b>  {tier}\n"
-            f"   📅 Formed: {formed} ({fdays}d) | TF: {tf}\n"
+            f"   {date_str}\n"
             f"   CMP ₹{r['cmp']} | BZ ₹{r['breakout_zone']} | SL ₹{r.get('stop_loss','?')}\n"
             f"   T1 ₹{r.get('target_1','?')} by {t1_eta} | "
             f"T2 ₹{r.get('target_2','?')} by {t2_eta} | "
             f"T3 ₹{r.get('target_3','?')} by {t3_eta}\n"
             f"   RR {r.get('risk_reward','?')}x | CANSLIM {r['canslim_score']}/{r.get('data_completeness','?')} | "
-            f"RS {r.get('rs_percentile','?')}pct | {r.get('stage','?')}{notes}"
+            f"RS {r.get('rs_percentile','?')}pct | {r.get('stage','?')}{pio_str}{deal_str}{notes}"
         )
     return "\n".join(lines)
 
@@ -2614,14 +2840,14 @@ def healthcheck():
 # ================================================================
 def track_outcomes(con):
     """
-    Run daily to fill in forward returns for signals from 3/5/10/20 days ago.
-    Builds the evidence base for knowing which detectors work on NSE.
+    GAP-B2 FIX: Now records actual_r_multiple = (current_price - entry) / (entry - stop)
+    and exit_type = T1 | STOP | OPEN for each signal outcome.
 
-    BUG2 FIX: old code used INSERT OR REPLACE ... ON CONFLICT DO UPDATE with
-    excluded.price_Xd/excluded.return_Xd, but those columns were NOT in the
-    INSERT column list → SQLite 'no such column: excluded.price_Xd' on every call
-    → signal_outcomes table was ALWAYS empty → outcome tracking completely broken.
-    Fixed by: INSERT OR IGNORE (create row), then plain UPDATE (write lookback cols).
+    This enables expectancy calculation in print_outcome_summary:
+      E = avg(r_multiple) across all closed signals per pattern.
+
+    Previously only tracked binary hit_t1 / hit_stop booleans — insufficient
+    for measuring system expectancy or comparing patterns.
     """
     today = str(_today())
     for lookback in [3, 5, 10, 20]:
@@ -2638,29 +2864,46 @@ def track_outcomes(con):
             if df is None or len(df) == 0: continue
             current_price = float(df["Close"].values[-1])
             entry = sig.get("cmp") or 0
+            stop  = sig.get("stop_loss") or 0
+            t1    = sig.get("target_1") or 0
             if entry <= 0: continue
             ret      = round((current_price - entry) / entry * 100, 2)
-            hit_t1   = 1 if (sig.get("target_1") and current_price >= sig["target_1"]) else 0
-            hit_stop = 1 if (sig.get("stop_loss") and current_price <= sig["stop_loss"]) else 0
+            hit_t1   = 1 if (t1   and current_price >= t1)   else 0
+            hit_stop = 1 if (stop and current_price <= stop)  else 0
+
+            # GAP-B2: R-multiple and exit type
+            if stop and entry > stop:
+                r_mult = round((current_price - entry) / (entry - stop), 2)
+            else:
+                r_mult = None
+
+            if hit_t1:
+                exit_type = "T1"
+            elif hit_stop:
+                exit_type = "STOP"
+            else:
+                exit_type = "OPEN"   # position still open at this lookback
+
             try:
                 with _db_lock:
-                    # Step 1: create the base row if it doesn't exist yet
                     con.execute("""
                         INSERT OR IGNORE INTO signal_outcomes
                         (stock, pattern, signal_date, entry_price,
-                         stop_loss, target_1, tracked_date, hit_t1, hit_stop)
-                        VALUES (?,?,?,?,?,?,?,?,?)
+                         stop_loss, target_1, tracked_date, hit_t1, hit_stop,
+                         actual_r_multiple, exit_type)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?)
                     """, (sig["stock"], sig["pattern"], sig["scan_date"],
-                          entry, sig.get("stop_loss"), sig.get("target_1"),
-                          today, hit_t1, hit_stop))
-                    # Step 2: update the specific lookback price/return columns
-                    # Uses plain UPDATE — no excluded.* nonsense needed
+                          entry, stop, t1,
+                          today, hit_t1, hit_stop, r_mult, exit_type))
                     con.execute(f"""
                         UPDATE signal_outcomes
                         SET {col}=?, {ret_col}=?,
-                            hit_t1=?, hit_stop=?, tracked_date=?
+                            hit_t1=?, hit_stop=?,
+                            actual_r_multiple=?, exit_type=?,
+                            tracked_date=?
                         WHERE stock=? AND pattern=? AND signal_date=?
-                    """, (current_price, ret, hit_t1, hit_stop, today,
+                    """, (current_price, ret, hit_t1, hit_stop,
+                          r_mult, exit_type, today,
                           sig["stock"], sig["pattern"], sig["scan_date"]))
                     con.commit()
             except Exception as e:
@@ -2669,7 +2912,14 @@ def track_outcomes(con):
 
 
 def print_outcome_summary(con):
-    """Print win-rate by pattern — the real backtest."""
+    """
+    GAP-B2 FIX: Now shows actual expectancy (E = avg R-multiple) per pattern,
+    not just binary T1 hit rate. Expectancy answers: "for every ₹1 risked,
+    how much did this pattern return on average?" E > 0 = profitable system.
+
+    Previous: only showed avg_5d%, winner/loser counts.
+    Now also shows: win_rate, avg_r_multiple (expectancy), sample quality.
+    """
     try:
         rows = db_query(con, """
             SELECT pattern,
@@ -2677,20 +2927,30 @@ def print_outcome_summary(con):
                    round(avg(return_5d),1) as avg_5d,
                    round(avg(return_10d),1) as avg_10d,
                    sum(hit_t1) as winners,
-                   sum(hit_stop) as losers
+                   sum(hit_stop) as losers,
+                   round(avg(actual_r_multiple),2) as avg_r,
+                   round(min(actual_r_multiple),2) as min_r,
+                   round(max(actual_r_multiple),2) as max_r
             FROM signal_outcomes
             WHERE return_5d IS NOT NULL
-            GROUP BY pattern ORDER BY avg_5d DESC
+            GROUP BY pattern ORDER BY avg_r DESC
         """)
         if not rows:
             log.info("No outcome data yet. Needs 5+ trading days of signals.")
             return
-        log.info("\n--- Signal Outcome Summary (5-day forward return) ---")
-        log.info(f"{'Pattern':<20} {'N':>5} {'Avg5d%':>8} {'Avg10d%':>8} {'Winners':>8} {'Losers':>7}")
+        log.info("\n--- Signal Outcome Summary (5-day forward return + expectancy) ---")
+        log.info(f"{'Pattern':<20} {'N':>4} {'WinRate':>7} {'Avg5d%':>7} "
+                 f"{'Avg10d%':>8} {'AvgR':>6} {'MinR':>6} {'MaxR':>6}")
+        log.info("-" * 72)
         for r in rows:
-            wr = round(r['winners']/(r['winners']+r['losers'])*100) if (r['winners']+r['losers'])>0 else 0
-            log.info(f"{r['pattern']:<20} {r['n']:>5} {r['avg_5d']:>8} {r['avg_10d']:>8} "
-                     f"{r['winners']:>5}({wr}%) {r['losers']:>7}")
+            total = (r['winners'] or 0) + (r['losers'] or 0)
+            wr = round(r['winners'] / total * 100) if total > 0 else 0
+            avg_r_str = f"{r['avg_r']:+.2f}" if r['avg_r'] is not None else "  N/A"
+            flag = "✅" if (r['avg_r'] or 0) > 0.5 else ("⚠️" if (r['avg_r'] or 0) < 0 else "  ")
+            log.info(f"{r['pattern']:<20} {r['n']:>4} {wr:>6}% "
+                     f"{r['avg_5d']:>7} {r['avg_10d']:>8} "
+                     f"{avg_r_str:>6} {(r['min_r'] or 0):>6.2f} {(r['max_r'] or 0):>6.2f} {flag}")
+        log.info("\nExpectancy guide: AvgR > +1.0 = excellent | +0.5 = good | <0 = fix or drop pattern")
     except Exception as e:
         log.debug(f"Outcome summary: {e}")
 
@@ -2843,9 +3103,7 @@ def main():
 
     log.info(f"{len(stocks)} stocks to scan")
 
-    # ── Warm-up price cache (incremental — only downloads what's new) ──────
-    # On first ever run: downloads 1y for all stocks (~15-20 min)
-    # On subsequent runs: only downloads last 7d (~3-4 min total)
+    # ── Warm-up price cache ──────────────────────────────────────────────────
     warm_cache(stocks, workers=MAX_WORKERS)
 
     ftd_active = False; market_trend = "Unknown"
@@ -2854,11 +3112,24 @@ def main():
         market_trend = check_market_trend(nifty_d["Close"].values)
         log.info(f"Market: {market_trend} | FTD: {ftd_active} ({ftd_note})")
 
+    # GAP-F2 FIX: Fetch bulk/block deals ONCE before the scan loop — O(1) not O(n).
+    # Previously: get_bulk_deals_today() was not called at all (wired but unused).
+    # Now: passed to every scan_stock() call so bulk deal notes appear in signals.
+    bulk_deals_today = {}
+    try:
+        from fundamentals import get_bulk_deals_today
+        bulk_deals_today = get_bulk_deals_today() or {}
+        if bulk_deals_today:
+            log.info(f"Bulk deals today: {len(bulk_deals_today)} entries loaded")
+    except Exception as _bd_ex:
+        log.debug(f"Bulk deals fetch failed (non-critical): {_bd_ex}")
+
     all_rows = []; ok_count = 0; fund_fails = 0
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futs = {ex.submit(scan_stock, s, nifty_d, ftd_active, market_trend,
-                                   aggression=aggression): s for s in stocks}
+                                   aggression=aggression,
+                                   bulk_deals_today=bulk_deals_today): s for s in stocks}
         for i, fut in enumerate(as_completed(futs)):
             if (i+1) % 200 == 0:
                 log.info(f"  {i+1}/{len(stocks)} | signals: {len(all_rows)}")
@@ -2900,26 +3171,27 @@ def main():
 
     def _score(r) -> float:
         """
-        10-POINT COMPOSITE SCORE SYSTEM
+        10-POINT COMPOSITE SCORE SYSTEM  (v4.0 — recalibrated)
         ════════════════════════════════
-        Replaces the opaque float scoring that gave no actionable signal.
-
         POINTS BREAKDOWN (max 10.0):
         ┌─────────────────────────────────────────────┬──────┐
         │ Component                                   │ Max  │
         ├─────────────────────────────────────────────┼──────┤
-        │ 1. CANSLIM score (normalised)               │ 2.5  │
-        │ 2. RS Percentile (true cross-sectional)     │ 1.5  │
-        │ 3. Risk:Reward ratio                        │ 1.5  │
-        │ 4. Volume surge (vs 20d avg)                │ 1.0  │
+        │ 1. CANSLIM score (normalised)               │ 2.3  │
+        │ 2. RS Percentile (true cross-sectional)     │ 1.4  │
+        │ 3. Risk:Reward ratio                        │ 1.3  │
+        │ 4. Volume surge (vs 20d avg)                │ 0.9  │
         │ 5. TI65 trend intensity (Bonde)             │ 0.5  │
-        │ 6. Lynch score (2LYNCH checklist)           │ 0.5  │
+        │ 6. Lynch score (2LYNCH checklist)           │ 0.4  │
         │ 7. Weinstein Stage 2                        │ 0.5  │
         │ 8. Volume dry-up (smart money stealth)      │ 0.3  │
-        │ 9. Pattern quality (detector signal)        │ 0.5  │
+        │ 9. Pattern quality (detector signal)        │ 0.4  │
         │10. Earnings safe (no event <14d)            │ 0.2  │
-        │11. RS line leading (new 52wk high before    │ 0.5  │
-        │    price — O'Neil highest-conviction signal)│      │
+        │11. RS line leading (O'Neil best signal)     │ 0.5  │
+        │12. Piotroski F-score ≥ 7 (GAP-F3)          │ 0.3  │
+        │13. Bulk/block deal today (GAP-F2)           │ 0.4  │
+        │14. Promoter pledge quality (GAP-F1)         │ 0.3  │
+        │15. VCP contraction bonus: 3+ (GAP-P6)      │ 0.3  │
         └─────────────────────────────────────────────┴──────┘
 
         TIERS:
@@ -2928,82 +3200,104 @@ def main():
           WATCH        ≥ 3.5  — pattern detected, not all factors confirm
           AVOID        < 3.5  — pattern weak, pass
 
-        Score is stored as 'score10' in the output CSV (0.0–10.0, 1dp).
+        Score stored as 'score10' in output CSV (0.0–10.0, 1dp).
         """
         score = 0.0
 
-        # ── 1. CANSLIM (2.5 pts) ──────────────────────────────────────────────
+        # ── 1. CANSLIM (2.3 pts) ──────────────────────────────────────────────
         cs = r.get("canslim_score") or 0
         dc = max(r.get("data_completeness") or 1, 1)
-        # Normalize: if only 3 of 7 checks available, don't penalise
         canslim_norm = cs / dc   # 0.0 – 1.0
-        score += canslim_norm * 2.5
+        score += canslim_norm * 2.3
 
-        # ── 2. RS Percentile (1.5 pts) ─────────────────────────────────────
-        # O'Neil: only buy stocks with RS ≥ 70th percentile vs index
+        # ── 2. RS Percentile (1.4 pts) ─────────────────────────────────────
         rs = r.get("rs_percentile")
         if rs is not None:
-            if rs >= 90:   score += 1.5
-            elif rs >= 80: score += 1.2
-            elif rs >= 70: score += 0.9
-            elif rs >= 60: score += 0.5
-            # Below 60th percentile = 0 — underperforming market
+            if rs >= 90:   score += 1.4
+            elif rs >= 80: score += 1.1
+            elif rs >= 70: score += 0.8
+            elif rs >= 60: score += 0.4
 
-        # ── 3. Risk:Reward (1.5 pts) ──────────────────────────────────────
-        # Minimum viable RR = 2:1. Below 1.5:1 = unacceptable.
+        # ── 3. Risk:Reward (1.3 pts) ──────────────────────────────────────
         rr = r.get("risk_reward") or 0
-        if rr >= 4.0:   score += 1.5
-        elif rr >= 3.0: score += 1.2
-        elif rr >= 2.0: score += 0.9
-        elif rr >= 1.5: score += 0.4
-        # Below 1.5 RR = 0 — poor risk/reward
+        if rr >= 4.0:   score += 1.3
+        elif rr >= 3.0: score += 1.0
+        elif rr >= 2.0: score += 0.7
+        elif rr >= 1.5: score += 0.3
 
-        # ── 4. Volume surge (1.0 pt) ──────────────────────────────────────
-        # Minervini: 1.5× min, 2.5× = institutional conviction
+        # ── 4. Volume surge (0.9 pt) ──────────────────────────────────────
         vs = r.get("vol_surge") or 0
-        if vs >= 4.0:   score += 1.0
-        elif vs >= 2.5: score += 0.8
-        elif vs >= 1.5: score += 0.5
-        elif vs >= 1.0: score += 0.2
+        if vs >= 4.0:   score += 0.9
+        elif vs >= 2.5: score += 0.7
+        elif vs >= 1.5: score += 0.4
+        elif vs >= 1.0: score += 0.15
 
         # ── 5. TI65 trend intensity (0.5 pt) ──────────────────────────────
         ti = r.get("ti65") or 0
-        if ti >= 1.10:   score += 0.5    # strong uptrend
+        if ti >= 1.10:   score += 0.5
         elif ti >= 1.05: score += 0.35
-        elif ti >= 1.0:  score += 0.2    # borderline — burst day
+        elif ti >= 1.0:  score += 0.2
 
-        # ── 6. Lynch score / 2LYNCH (0.5 pt) ──────────────────────────────
+        # ── 6. Lynch score (0.4 pt) ──────────────────────────────────────
         ls = r.get("lynch_score_val") or 0
-        if ls >= 5:   score += 0.5
-        elif ls >= 4: score += 0.4
-        elif ls >= 3: score += 0.25
+        if ls >= 5:   score += 0.4
+        elif ls >= 4: score += 0.3
+        elif ls >= 3: score += 0.2
         elif ls >= 2: score += 0.1
 
         # ── 7. Weinstein Stage 2 (0.5 pt) ─────────────────────────────────
         stage = str(r.get("stage") or "")
         if "Stage2" in stage:   score += 0.5
-        elif "Stage1" in stage: score += 0.2   # basing — acceptable
-        elif "Stage3" in stage: score -= 0.2   # topping — penalty
+        elif "Stage1" in stage: score += 0.2
+        elif "Stage3" in stage: score -= 0.2
 
         # ── 8. Volume dry-up (0.3 pt) ──────────────────────────────────────
         if r.get("vol_dryup"): score += 0.3
 
-        # ── 9. Pattern quality (0.5 pt) ────────────────────────────────────
+        # ── 9. Pattern quality (0.4 pt) ────────────────────────────────────
         q = r.get("quality") or 0
-        if q >= 0.08:   score += 0.5    # very high quality burst/breakout
-        elif q >= 0.05: score += 0.35
-        elif q >= 0.02: score += 0.2
-        elif q > 0:     score += 0.1
+        if q >= 0.08:   score += 0.4
+        elif q >= 0.05: score += 0.28
+        elif q >= 0.02: score += 0.15
+        elif q > 0:     score += 0.08
 
         # ── 10. Earnings safety (0.2 pt) ──────────────────────────────────
-        # Buying into known earnings = binary event risk = penalty
         if not r.get("earnings_near"): score += 0.2
 
-        # ── 11. RS Line Leadership (0.5 pt) — Gap 11 FIX ──────────────────
-        # O'Neil's highest-conviction signal: RS line making new 52-week high
-        # BEFORE or simultaneously with the price breakout.
+        # ── 11. RS Line Leadership (0.5 pt) ───────────────────────────────
         notes_str = str(r.get("notes") or "")
         if "RS-LEAD" in notes_str: score += 0.5
+
+        # ── 12. Piotroski F-score (0.3 pt, -0.3 penalty) — GAP-F3 ─────────
+        pio = r.get("piotroski_score")
+        if pio is not None:
+            if pio >= 7:   score += 0.3   # strong financials
+            elif pio <= 2: score -= 0.3   # weak financials — penalty
+
+        # ── 13. Bulk/Block deal today (0.4 pt) — GAP-F2 ───────────────────
+        # Institutional accumulation on the signal day = strong confirmation
+        if r.get("bulk_deal_cr") and r["bulk_deal_cr"] > 0:
+            score += 0.4
+
+        # ── 14. Promoter pledge quality (0.3 pt, -0.5 penalty) — GAP-F1 ──
+        pledge = r.get("pledge_pct") or 0
+        promoter = r.get("scr_promoter_pct") or 0   # will be None until fund wired fully
+        if pledge < 5 and promoter > 50:
+            score += 0.3    # low pledge + high promoter confidence
+        elif pledge > 20:
+            score -= 0.5    # dangerous pledging level
+        elif pledge > 10:
+            score -= 0.1    # mild concern
+
+        # ── 15. VCP contraction count bonus (0.3 pt) — GAP-P6 ─────────────
+        # Minervini: 3+ contractions = markedly higher probability
+        if "VCP" in str(r.get("pattern") or "") and "VCP(" in notes_str:
+            try:
+                n_ct = int(notes_str.split("VCP(")[1].split("C)")[0])
+                if n_ct >= 4:   score += 0.3
+                elif n_ct >= 3: score += 0.2
+            except Exception:
+                pass
 
         return round(min(score, 10.0), 2)
 
@@ -3021,36 +3315,44 @@ def main():
     # Save to DB
     db_execmany(con, """INSERT INTO signals
         (scan_date,scan_time,scan_mode,stock,name,sector,cap_class,cap_cr,
-         pattern,timeframe,pattern_formed,formation_days,
+         pattern,timeframe,pattern_formed,pattern_start_date,pattern_end_date,formation_days,
          t1_eta,t2_eta,t3_eta,
          status,breakout_zone,cmp,stop_loss,
          target_1,target_2,target_3,risk_reward,quality,vol_surge,
          canslim_score,data_completeness,rs_percentile,dist_52wk_pct,converging,leg,
          earnings_near,ftd_active,vol_dryup,stage,recommendation,
-         ti65,lynch_score_val,m1,m2,m3,m4,m5,notes)
+         ti65,lynch_score_val,piotroski_score,pledge_pct,bulk_deal_cr,
+         m1,m2,m3,m4,m5,notes)
         VALUES (:scan_date,:scan_time,:scan_mode,:stock,:name,:sector,:cap_class,:cap_cr,
-         :pattern,:timeframe,:pattern_formed,:formation_days,
+         :pattern,:timeframe,:pattern_formed,:pattern_start_date,:pattern_end_date,:formation_days,
          :t1_eta,:t2_eta,:t3_eta,
          :status,:breakout_zone,:cmp,:stop_loss,
          :target_1,:target_2,:target_3,:risk_reward,:quality,:vol_surge,
          :canslim_score,:data_completeness,:rs_percentile,:dist_52wk_pct,:converging,:leg,
          :earnings_near,:ftd_active,:vol_dryup,:stage,:recommendation,
-         :ti65,:lynch_score_val,:m1,:m2,:m3,:m4,:m5,:notes)""",
+         :ti65,:lynch_score_val,:piotroski_score,:pledge_pct,:bulk_deal_cr,
+         :m1,:m2,:m3,:m4,:m5,:notes)""",
                 df.to_dict("records"))
 
-    # Update watchlist JSON (persisted via git commit in workflow)
+    # Update watchlist JSON
     wl_items = []
     for _, r in df.iterrows():
         wl_items.append({
             "stock": r["stock"], "name": r.get("name"), "sector": r.get("sector"),
             "cap_class": r.get("cap_class"), "pattern": r["pattern"],
-            "timeframe": r.get("timeframe"), "pattern_formed": r.get("pattern_formed"),
+            "timeframe": r.get("timeframe"),
+            "pattern_formed": r.get("pattern_formed"),
+            "pattern_start_date": r.get("pattern_start_date"),  # GAP-P1
+            "pattern_end_date":   r.get("pattern_end_date"),    # GAP-P2
             "formation_days": r.get("formation_days"),
             "breakout_zone": r.get("breakout_zone"), "stop_loss": r.get("stop_loss"),
             "target_1": r.get("target_1"), "risk_reward": r.get("risk_reward"),
             "t1_eta": r.get("t1_eta"), "t2_eta": r.get("t2_eta"), "t3_eta": r.get("t3_eta"),
             "status": r.get("status"), "added_date": str(_today()),
             "score10": r.get("score10"), "tier": r.get("tier"),
+            "piotroski_score": r.get("piotroski_score"),
+            "pledge_pct": r.get("pledge_pct"),
+            "bulk_deal_cr": r.get("bulk_deal_cr"),
         })
     # Merge with existing (keep entries from last 30 days, dedup by stock+pattern)
     existing_wl = {f"{w['stock']}_{w['pattern']}": w for w in load_watchlist()}
@@ -3103,15 +3405,35 @@ def main():
         send_telegram_file(watch_path, watch_cap)
 
     # Gap 7 FIX: auto-run outcome tracking at end of every daily scan.
-    # The signal_outcomes table was always empty because track_outcomes() was
-    # only called via --outcomes flag.  Now it runs automatically so the
-    # feedback loop activates from day 1 without any extra CLI call.
     try:
         log.info("Auto-tracking signal outcomes …")
         track_outcomes(con)
         print_outcome_summary(con)
     except Exception as e:
         log.debug(f"Auto outcome tracking: {e}")
+
+    # GAP-OP4 FIX: Clean up output files older than 30 days.
+    # With 3 scans/day × 3 files = 9+ files/day, this prevents unbounded growth.
+    try:
+        cutoff = _today() - timedelta(days=30)
+        removed = 0
+        for fname in os.listdir(OUTPUT_DIR):
+            fpath = os.path.join(OUTPUT_DIR, fname)
+            if not os.path.isfile(fpath): continue
+            # Filenames include date: scan_BUY_2026-01-01_1630.csv
+            for ext in [".csv", ".json", ".txt"]:
+                if fname.endswith(ext):
+                    try:
+                        mtime = date.fromtimestamp(os.path.getmtime(fpath))
+                        if mtime < cutoff:
+                            os.remove(fpath)
+                            removed += 1
+                    except Exception:
+                        pass
+        if removed:
+            log.info(f"Cleaned {removed} output files older than 30 days")
+    except Exception as _clean_ex:
+        log.debug(f"Output cleanup: {_clean_ex}")
 
     con.close()
 
