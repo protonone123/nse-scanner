@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
 """
-NSE Data Updater v3.7
-======================
+NSE Data Updater
+=================
 Separate downloader. Scanner reads cache only — zero downloads during scan.
-
-Gap Fixes:
-  Gap 1: Uses nsepy (official NSE) first, falls back to yfinance
-  Gap 3: Uses Screener.in for actual quarterly fundamentals
-  Gap 5: Fetches delivery %, F&O OI, FII/DII, bulk deals from NSE APIs
-  
-New module: data_sources.py provides abstracted data fetching with fallbacks.
 
 Modes:
   --bootstrap   Full 10yr 1d/1wk/1mo + 2yr 1h + 60d 15m for all stocks (run once)
@@ -47,14 +40,6 @@ warnings.filterwarnings("ignore")
 import yfinance as yf
 import pandas as pd
 import numpy as np
-
-# Import the new Gap 1/3/5 data sources layer
-try:
-    from data_sources import dl_ohlcv, dl_fundamentals, get_delivery_pct, get_fo_oi_data, get_fii_dii_flow
-    HAS_DATA_SOURCES = True
-except ImportError:
-    log.warning("data_sources.py not found — falling back to yfinance only")
-    HAS_DATA_SOURCES = False
 
 # ================================================================
 # PATHS
@@ -177,24 +162,6 @@ def _normalize_df_index(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def dl(sym: str, interval: str = "1d", period: str = "1y") -> pd.DataFrame | None:
-    """
-    Download OHLCV data with priority fallback chain.
-    
-    Gap 1 Fix: Tries nsepy (official NSE) first via data_sources module.
-    Falls back to yfinance if nsepy fails or is not available.
-    """
-    # Gap 1: Try nsepy first (official NSE source)
-    if HAS_DATA_SOURCES and interval == "1d":  # nsepy only supports 1d timeframe
-        try:
-            start_date = date.today() - timedelta(days=365 if period == "1y" else 730)
-            df = dl_ohlcv(sym, start_date=start_date, end_date=date.today(), source="nsepy")
-            if df is not None and len(df) > 20:
-                log.debug(f"[Gap 1] {sym} fetched via nsepy ({len(df)} rows)")
-                return df
-        except Exception as e:
-            log.debug(f"[Gap 1] nsepy failed for {sym}: {e}")
-    
-    # Fallback: yfinance (original code)
     for attempt in range(DL_RETRIES):
         try:
             sess = _get_session()
