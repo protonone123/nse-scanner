@@ -1,789 +1,755 @@
 #!/usr/bin/env python3
 """
-fundamentals.py — Multi-source fundamental data fetcher for NSE stocks
-=======================================================================
-Sources:
-  1. yfinance    — PE, EPS growth, revenue, institutions, float, debt/equity
-  2. Screener.in — promoter holding, pledging, Piotroski, ROCE, ROE, 3yr growth
-  3. NSE bulk    — daily bulk/block deals (official NSE CSV, free)
-  4. NSE results — earnings dates from NSE announcements
+fundamentals.py — NSE/BSE Supplemental Fundamental Data Layer
+===============================================================
+Provides data that yfinance cannot reliably supply for Indian equities.
 
-All results cached in fund_cache + bulk_deals tables (shared price_cache.db).
-Scanner imports: get_fundamentals(sym), get_bulk_deals_today(), get_screener_data(sym)
+Cached in price_cache.db (same DB as scanner) with per-function TTLs:
+  - Bulk/block deals : same-day cache (fetched once, shared across all scan_stock calls)
+  - Piotroski score  : 7-day TTL  (quarterly financials don't change daily)
+  - Promoter/pledge  : 7-day TTL  (shareholding pattern filed quarterly)
+
+Public API
+----------
+  get_bulk_deals_today()                   → dict {SYM: {"value_cr": float, "type": str, "side": str}}
+  has_insider_activity(sym, bulk_deals)    → (bool, float|None, str|None)
+  get_piotroski_score(sym)                 → int|None  (0-9)
+  get_promoter_data(sym)                   → {"pledge_pct": float, "promoter_pct": float}
+  get_full_fundamentals(sym)               → merged dict (used by dl_fund enrichment)
+
+Phase-1 gaps addressed
+-----------------------
+  DS1  fundamentals.py existed in scanner imports but was missing from repo.
+         All GAP-F1/F2/F3 score components (pledge, bulk-deal, Piotroski) were dead code.
+  DS2  scr_promoter_pct / scr_pledging_pct keys now populated here.
 """
 
-import os, json, time, logging, sqlite3, re
-from datetime import date, datetime, timedelta, timezone
+import os
+import json
+import time
+import logging
+import sqlite3
+from datetime import date, datetime, timedelta
 from threading import Lock
-from io import StringIO
+
+import requests
+import pandas as pd
+import numpy as np
 
 log = logging.getLogger("fundamentals")
 
-_IST = timezone(timedelta(hours=5, minutes=30))
-def _today(): return datetime.now(_IST).date()
-
+# ── Paths ─────────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 CACHE_PATH = os.path.join(BASE_DIR, "price_cache.db")
 
+# ── TTLs ──────────────────────────────────────────────────────────────────────
+TTL_BULK    = 0   # same-day only — fetched once per scan run
+TTL_PIO     = 7   # days — quarterly financials
+TTL_PLEDGE  = 7   # days — quarterly shareholding pattern
+
+# ── Cache DB (shared with scanner/data_updater) ───────────────────────────────
 _db_lock = Lock()
 _db_con  = None
 
-# ================================================================
-# DB CONNECTION (shared with data_updater + scanner)
-# ================================================================
 def _get_db():
     global _db_con
     with _db_lock:
         if _db_con is None:
             _db_con = sqlite3.connect(CACHE_PATH, check_same_thread=False)
             _db_con.execute("PRAGMA journal_mode=WAL")
+            _db_con.execute("PRAGMA synchronous=NORMAL")
+            # Extended fund_cache: add ttl_days + piotroski/pledge columns
             _db_con.executescript("""
                 CREATE TABLE IF NOT EXISTS fund_cache (
                     stock        TEXT PRIMARY KEY,
                     fund_json    TEXT,
                     updated_date TEXT
                 );
-                CREATE TABLE IF NOT EXISTS bulk_deals (
-                    deal_date   TEXT NOT NULL,
-                    stock       TEXT NOT NULL,
-                    client_name TEXT,
-                    deal_type   TEXT,
-                    qty         REAL,
-                    price       REAL,
-                    exchange    TEXT,
-                    PRIMARY KEY (deal_date, stock, client_name)
+                CREATE TABLE IF NOT EXISTS fundamentals_ext (
+                    stock        TEXT NOT NULL,
+                    data_key     TEXT NOT NULL,
+                    value_json   TEXT,
+                    updated_date TEXT,
+                    PRIMARY KEY (stock, data_key)
                 );
-                CREATE TABLE IF NOT EXISTS screener_cache (
-                    stock        TEXT PRIMARY KEY,
-                    data_json    TEXT,
-                    updated_date TEXT
+                CREATE TABLE IF NOT EXISTS bulk_deals_cache (
+                    trade_date   TEXT NOT NULL,
+                    symbol       TEXT NOT NULL,
+                    value_cr     REAL,
+                    deal_type    TEXT,
+                    side         TEXT,
+                    PRIMARY KEY (trade_date, symbol)
                 );
-                CREATE INDEX IF NOT EXISTS idx_bulk_date  ON bulk_deals(deal_date);
-                CREATE INDEX IF NOT EXISTS idx_bulk_stock ON bulk_deals(stock);
             """)
             _db_con.commit()
         return _db_con
 
 
-# ================================================================
-# YFINANCE ENHANCED FUNDAMENTALS
-# ================================================================
-def _fetch_yfinance(sym: str) -> dict:
-    """
-    Full yfinance fundamentals for one stock.
-    Returns structured dict with all available metrics.
-    """
-    result = {"_source": "yfinance", "_ok": False}
+def _cache_read_ext(stock: str, data_key: str, ttl_days: int) -> dict | None:
+    """Read from fundamentals_ext cache. Returns None if missing or stale."""
     try:
-        import yfinance as yf
-        try:
-            from curl_cffi import requests as _cr
-            sess = _cr.Session(impersonate="chrome110")
-            sess.get("https://finance.yahoo.com", timeout=10)
-        except Exception:
-            sess = None
-
-        kw = {"session": sess} if sess else {}
-        tk = yf.Ticker(sym, **kw)
-        info = tk.info or {}
-        if not info.get("regularMarketPrice") and not info.get("currentPrice"):
-            return result
-
-        result.update({
-            "_ok": True,
-            # Valuation
-            "pe_ratio":             info.get("trailingPE"),
-            "forward_pe":           info.get("forwardPE"),
-            "pb_ratio":             info.get("priceToBook"),
-            "ps_ratio":             info.get("priceToSalesTrailing12Months"),
-            "ev_ebitda":            info.get("enterpriseToEbitda"),
-            "peg_ratio":            info.get("pegRatio"),
-            # Size
-            "market_cap":           info.get("marketCap"),
-            "enterprise_value":     info.get("enterpriseValue"),
-            # Growth
-            "eps_growth_qoq":       info.get("earningsQuarterlyGrowth"),
-            "eps_growth_yoy":       info.get("earningsGrowth"),
-            "revenue_growth_yoy":   info.get("revenueGrowth"),
-            # Profitability
-            "roe":                  info.get("returnOnEquity"),
-            "roa":                  info.get("returnOnAssets"),
-            "profit_margin":        info.get("profitMargins"),
-            "gross_margin":         info.get("grossMargins"),
-            "operating_margin":     info.get("operatingMargins"),
-            # Financial health
-            "debt_to_equity":       info.get("debtToEquity"),
-            "current_ratio":        info.get("currentRatio"),
-            "quick_ratio":          info.get("quickRatio"),
-            "free_cashflow":        info.get("freeCashflow"),
-            "operating_cashflow":   info.get("operatingCashflow"),
-            # Ownership
-            "inst_holding_pct":     info.get("heldPercentInstitutions"),
-            "insider_holding_pct":  info.get("heldPercentInsiders"),
-            "float_shares":         info.get("floatShares"),
-            "shares_outstanding":   info.get("sharesOutstanding"),
-            "shares_short_pct":     info.get("shortPercentOfFloat"),
-            # Dividends
-            "dividend_yield":       info.get("dividendYield"),
-            "payout_ratio":         info.get("payoutRatio"),
-            # Per-share
-            "book_value_per_share": info.get("bookValue"),
-            "eps_ttm":              info.get("trailingEps"),
-            "eps_forward":          info.get("forwardEps"),
-            # Price reference
-            "52wk_high":            info.get("fiftyTwoWeekHigh"),
-            "52wk_low":             info.get("fiftyTwoWeekLow"),
-            "avg_vol_10d":          info.get("averageVolume10days"),
-            "avg_vol_3mo":          info.get("averageVolume"),
-            # Company info
-            "sector":               info.get("sector"),
-            "industry":             info.get("industry"),
-            "long_name":            info.get("longName") or info.get("shortName"),
-            "employees":            info.get("fullTimeEmployees"),
-            "country":              info.get("country"),
-        })
-
-        # Computed fields
-        mc = result.get("market_cap") or 0
-        if mc:
-            result["cap_cr"] = round(mc / 1e7, 1)
-            result["cap_class"] = (
-                "Large" if mc >= 2e12 else
-                "Mid"   if mc >= 5e11 else
-                "Small" if mc >= 5e10 else "Micro"
-            )
-        fl = result.get("float_shares") or 0
-        so = result.get("shares_outstanding") or 0
-        if so > 0 and fl > 0:
-            result["free_float_pct"] = round(fl / so * 100, 1)
-
-        # Earnings calendar
-        try:
-            cal = tk.calendar
-            ne = cal.get("Earnings Date", [None])[0] if cal else None
-            result["next_earnings"] = str(ne)[:10] if ne else None
-        except Exception:
-            result["next_earnings"] = None
-
-        # Income statement — 4Q EPS for acceleration check
-        try:
-            import warnings
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                qf = tk.quarterly_financials
-            if qf is not None and len(qf.columns) >= 4:
-                net_inc = qf.loc["Net Income"] if "Net Income" in qf.index else None
-                if net_inc is not None:
-                    eps_vals = net_inc.values[:4]  # last 4 quarters
-                    result["eps_q1"] = float(eps_vals[0]) if len(eps_vals) > 0 else None
-                    result["eps_q2"] = float(eps_vals[1]) if len(eps_vals) > 1 else None
-                    result["eps_q3"] = float(eps_vals[2]) if len(eps_vals) > 2 else None
-                    result["eps_q4"] = float(eps_vals[3]) if len(eps_vals) > 3 else None
-                    # EPS acceleration check (3+ quarters of increasing growth)
-                    if all(v is not None for v in [result.get("eps_q1"), result.get("eps_q2"),
-                                                    result.get("eps_q3"), result.get("eps_q4")]):
-                        q_vals = [result["eps_q4"], result["eps_q3"], result["eps_q2"], result["eps_q1"]]
-                        growth_rates = []
-                        for i in range(1, len(q_vals)):
-                            if q_vals[i-1] != 0:
-                                growth_rates.append((q_vals[i] - q_vals[i-1]) / abs(q_vals[i-1]))
-                        result["eps_accelerating"] = (
-                            len(growth_rates) >= 3 and
-                            all(growth_rates[i] > growth_rates[i-1]
-                                for i in range(1, len(growth_rates)))
-                        )
-        except Exception:
-            pass
-
-    except Exception as e:
-        log.debug(f"yfinance {sym}: {e}")
-
-    return result
-
-
-# ================================================================
-# SCREENER.IN SCRAPER
-# ================================================================
-def _fetch_screener(sym_clean: str) -> dict:
-    """
-    Scrape Screener.in for NSE stock fundamentals.
-    Returns promoter holding, pledging, Piotroski, ROCE, ROE, growth.
-    sym_clean: stock symbol without .NS (e.g. 'RELIANCE')
-    """
-    result = {"_source": "screener", "_ok": False}
-    try:
-        import requests as req
-        from bs4 import BeautifulSoup
-
-        url = f"https://www.screener.in/company/{sym_clean}/consolidated/"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        }
-        resp = req.get(url, headers=headers, timeout=15)
-        if resp.status_code == 404:
-            # Try standalone
-            url2 = f"https://www.screener.in/company/{sym_clean}/"
-            resp = req.get(url2, headers=headers, timeout=15)
-        if resp.status_code != 200:
-            return result
-
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        def _get_ratio(label: str) -> float | None:
-            """Find a ratio value by its label in the page."""
-            for li in soup.find_all("li", class_="flex"):
-                span = li.find("span", class_="name")
-                val  = li.find("span", class_="number")
-                if span and val and label.lower() in span.get_text(strip=True).lower():
-                    try:
-                        txt = val.get_text(strip=True).replace(",","").replace("%","")
-                        return float(txt)
-                    except Exception:
-                        return None
+        con = _get_db()
+        row = con.execute(
+            "SELECT value_json, updated_date FROM fundamentals_ext WHERE stock=? AND data_key=?",
+            (stock, data_key)
+        ).fetchone()
+        if not row or not row[0]:
             return None
-
-        # Key ratios
-        result["scr_roe"]              = _get_ratio("ROE")
-        result["scr_roce"]             = _get_ratio("ROCE")
-        result["scr_debt_equity"]      = _get_ratio("Debt / Equity")
-        result["scr_pe"]               = _get_ratio("Stock P/E")
-        result["scr_pb"]               = _get_ratio("Price to Book")
-        result["scr_dividend_yield"]   = _get_ratio("Dividend Yield")
-        result["scr_current_ratio"]    = _get_ratio("Current ratio")
-
-        # Promoter + pledging from shareholding section
-        shp_section = soup.find("section", {"id": "shareholding"})
-        if shp_section:
-            tables = shp_section.find_all("table")
-            for tbl in tables:
-                rows = tbl.find_all("tr")
-                for row in rows:
-                    cells = row.find_all("td")
-                    if not cells: continue
-                    label = cells[0].get_text(strip=True).lower()
-                    if "promoter" in label and "pledged" not in label and len(cells) >= 2:
-                        try:
-                            result["scr_promoter_pct"] = float(
-                                cells[-1].get_text(strip=True).replace("%",""))
-                        except Exception: pass
-                    if "pledg" in label and len(cells) >= 2:
-                        try:
-                            result["scr_pledging_pct"] = float(
-                                cells[-1].get_text(strip=True).replace("%",""))
-                        except Exception: pass
-
-        # 10-year compounded growth rates
-        growth_section = soup.find("section", {"id": "profit-loss"})
-        if growth_section:
-            comp_rows = growth_section.find_all("tr")
-            for row in comp_rows:
-                txt = row.get_text(" ", strip=True).lower()
-                if "compounded sales growth" in txt or "compounded revenue" in txt:
-                    cells = row.find_all("td")
-                    for c in cells:
-                        t = c.get_text(strip=True)
-                        if "3 years" in t.lower() and len(cells) > 1:
-                            try:
-                                idx = cells.index(c)
-                                result["scr_revenue_growth_3yr"] = float(
-                                    cells[idx+1].get_text(strip=True).replace("%",""))
-                            except Exception: pass
-                if "compounded profit growth" in txt:
-                    cells = row.find_all("td")
-                    for c in cells:
-                        t = c.get_text(strip=True)
-                        if "3 years" in t.lower() and len(cells) > 1:
-                            try:
-                                idx = cells.index(c)
-                                result["scr_profit_growth_3yr"] = float(
-                                    cells[idx+1].get_text(strip=True).replace("%",""))
-                            except Exception: pass
-
-        # Piotroski score (if shown)
-        for tag in soup.find_all(string=re.compile("Piotroski", re.I)):
-            parent = tag.parent
-            sib = parent.find_next_sibling()
-            if sib:
-                try:
-                    result["scr_piotroski"] = int(sib.get_text(strip=True))
-                except Exception: pass
-
-        result["_ok"] = any(v is not None for k, v in result.items()
-                            if k.startswith("scr_"))
-
-    except ImportError:
-        log.debug("bs4 not installed — Screener.in scraping disabled. pip install beautifulsoup4")
-    except Exception as e:
-        log.debug(f"Screener.in {sym_clean}: {e}")
-
-    return result
-
-
-# ================================================================
-# NSE BULK DEALS
-# ================================================================
-def fetch_nse_bulk_deals(target_date: date | None = None) -> list[dict]:
-    """
-    Download NSE bulk deals CSV for a given date.
-    Official source: https://nsearchives.nseindia.com/content/equities/bulk.csv
-    Returns list of deal dicts.
-    """
-    if target_date is None:
-        target_date = _today()
-
-    deals = []
-    urls = [
-        "https://nsearchives.nseindia.com/content/equities/bulk.csv",
-        f"https://www.nseindia.com/api/historical/bulk-deals?from={target_date}&to={target_date}",
-    ]
-
-    try:
-        import requests as req
-        headers = {
-            "User-Agent":  "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            "Accept":      "text/html,application/xhtml+xml,*/*;q=0.8",
-            "Referer":     "https://www.nseindia.com/",
-        }
-
-        # Try CSV first
-        resp = req.get(urls[0], headers=headers, timeout=20)
-        if resp.status_code == 200:
-            import io, csv
-            reader = csv.DictReader(io.StringIO(resp.text))
-            for row in reader:
-                try:
-                    deal_date_str = row.get("Date", "") or row.get("TRADE_DATE", "")
-                    # Parse various date formats
-                    for fmt in ["%d-%b-%Y", "%d/%m/%Y", "%Y-%m-%d"]:
-                        try:
-                            deal_date = datetime.strptime(deal_date_str.strip(), fmt).date()
-                            break
-                        except Exception:
-                            deal_date = None
-                    if deal_date != target_date:
-                        continue
-                    symbol = (row.get("Symbol","") or row.get("SYMBOL","")).strip().upper()
-                    if not symbol:
-                        continue
-                    deals.append({
-                        "date":        str(deal_date),
-                        "stock":       symbol,
-                        "client":      (row.get("Client Name","") or row.get("CLIENT_NAME","")).strip(),
-                        "deal_type":   (row.get("Buy/Sell","") or row.get("BUY_SELL","")).strip(),
-                        "qty":         _safe_float(row.get("Quantity Traded","") or row.get("QTY","")),
-                        "price":       _safe_float(row.get("Trade Price","") or row.get("PRICE","")),
-                        "exchange":    "NSE",
-                    })
-                except Exception:
-                    continue
-
-        # If CSV empty, try JSON API
-        if not deals:
-            session = req.Session()
-            # Get cookies first
-            session.get("https://www.nseindia.com", headers=headers, timeout=10)
-            api_resp = session.get(
-                f"https://www.nseindia.com/api/historical/bulk-deals?"
-                f"from={target_date.strftime('%d-%m-%Y')}&to={target_date.strftime('%d-%m-%Y')}",
-                headers={**headers, "Accept": "application/json"},
-                timeout=15
-            )
-            if api_resp.status_code == 200:
-                data = api_resp.json()
-                for row in (data.get("data") or []):
-                    deals.append({
-                        "date":      str(target_date),
-                        "stock":     row.get("symbol","").strip().upper(),
-                        "client":    row.get("clientName","").strip(),
-                        "deal_type": row.get("buySell","").strip(),
-                        "qty":       _safe_float(row.get("quantityTraded","")),
-                        "price":     _safe_float(row.get("tradePrice","")),
-                        "exchange":  "NSE",
-                    })
-
-    except Exception as e:
-        log.warning(f"NSE bulk deals fetch failed: {e}")
-
-    # Store in DB
-    if deals:
-        _store_bulk_deals(deals)
-
-    log.info(f"NSE bulk deals {target_date}: {len(deals)} deals")
-    return deals
-
-
-def _safe_float(val) -> float | None:
-    try:
-        return float(str(val).replace(",","").strip())
+        if ttl_days > 0:
+            try:
+                updated = date.fromisoformat(row[1])
+                if (date.today() - updated).days > ttl_days:
+                    return None  # stale
+            except Exception:
+                return None
+        return json.loads(row[0])
     except Exception:
         return None
 
 
-def _store_bulk_deals(deals: list[dict]):
+def _cache_write_ext(stock: str, data_key: str, data: dict):
+    """Write to fundamentals_ext cache."""
     try:
         con = _get_db()
         with _db_lock:
-            con.executemany(
-                "INSERT OR REPLACE INTO bulk_deals "
-                "(deal_date,stock,client_name,deal_type,qty,price,exchange) "
-                "VALUES (:date,:stock,:client,:deal_type,:qty,:price,:exchange)",
-                deals
+            con.execute(
+                "INSERT OR REPLACE INTO fundamentals_ext (stock, data_key, value_json, updated_date) "
+                "VALUES (?, ?, ?, ?)",
+                (stock, data_key, json.dumps(data), str(date.today()))
             )
             con.commit()
     except Exception as e:
-        log.debug(f"Store bulk deals: {e}")
+        log.debug(f"Cache write ext {stock}/{data_key}: {e}")
 
 
-def get_bulk_deals_today() -> dict[str, list[dict]]:
+# ================================================================
+# NSE SESSION — for API calls requiring cookies
+# ================================================================
+_NSE_SESSION      = None
+_NSE_SESSION_LOCK = Lock()
+_NSE_BASE         = "https://www.nseindia.com"
+
+_NSE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Referer": "https://www.nseindia.com/",
+    "X-Requested-With": "XMLHttpRequest",
+}
+
+
+def _get_nse_session() -> requests.Session:
+    global _NSE_SESSION
+    with _NSE_SESSION_LOCK:
+        if _NSE_SESSION is None:
+            _NSE_SESSION = _build_nse_session()
+        return _NSE_SESSION
+
+
+def _build_nse_session() -> requests.Session:
+    sess = requests.Session()
+    sess.headers.update(_NSE_HEADERS)
+    try:
+        # Warm up — sets cookies needed for API calls
+        sess.get(_NSE_BASE, timeout=15)
+        time.sleep(0.5)
+        sess.get(f"{_NSE_BASE}/market-data/live-equity-market", timeout=10)
+        time.sleep(0.3)
+        log.info("NSE session ready")
+    except Exception as e:
+        log.warning(f"NSE session warmup partial: {e}")
+    return sess
+
+
+def _reset_nse_session():
+    global _NSE_SESSION
+    with _NSE_SESSION_LOCK:
+        _NSE_SESSION = None
+
+
+def _nse_get(endpoint: str, retries: int = 3) -> dict | None:
+    """GET from NSE API with auto-retry and session refresh."""
+    url = f"{_NSE_BASE}{endpoint}"
+    for attempt in range(retries):
+        try:
+            sess = _get_nse_session()
+            resp = sess.get(url, timeout=20)
+            if resp.status_code == 403 or resp.status_code == 401:
+                log.warning(f"NSE {endpoint} got {resp.status_code} — rebuilding session")
+                _reset_nse_session()
+                time.sleep(3 * (attempt + 1))
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.JSONDecodeError:
+            log.debug(f"NSE {endpoint}: not JSON response (attempt {attempt+1})")
+        except Exception as e:
+            log.debug(f"NSE {endpoint} attempt {attempt+1}: {e}")
+            if attempt < retries - 1:
+                time.sleep(3 * (attempt + 1))
+    return None
+
+
+# ================================================================
+# BULK / BLOCK DEALS  (GAP-F2)
+# NSE publishes bulk and block deals for the current trading day.
+# We fetch once at scan start and pass the dict to every scan_stock call.
+# ================================================================
+
+def get_bulk_deals_today() -> dict:
     """
-    Returns dict mapping stock_symbol → list of deals today.
-    Scanner uses this to flag insider/institutional activity.
+    Fetch today's bulk and block deals from NSE.
+
+    Returns dict keyed by SYMBOL (uppercase, no .NS suffix):
+      {
+        "RELIANCE": {"value_cr": 250.5, "type": "BULK", "side": "BUY"},
+        "HDFCBANK":  {"value_cr": 120.0, "type": "BLOCK", "side": "SELL"},
+      }
+
+    Multiple deals for same stock are summed (net value).
+    Cached per trade date — safe to call multiple times in same process.
     """
+    today_str = str(date.today())
+
+    # Check same-day cache first
     try:
         con = _get_db()
-        today = str(_today())
         rows = con.execute(
-            "SELECT stock,client_name,deal_type,qty,price "
-            "FROM bulk_deals WHERE deal_date=?",
-            (today,)
+            "SELECT symbol, value_cr, deal_type, side FROM bulk_deals_cache WHERE trade_date=?",
+            (today_str,)
         ).fetchall()
-        result: dict[str, list] = {}
-        for r in rows:
-            sym = r[0]
-            if sym not in result:
-                result[sym] = []
-            result[sym].append({
-                "client": r[1], "type": r[2],
-                "qty": r[3], "price": r[4],
-            })
-        return result
+        if rows:
+            result = {}
+            for symbol, value_cr, deal_type, side in rows:
+                result[symbol] = {"value_cr": value_cr, "type": deal_type, "side": side}
+            log.debug(f"Bulk deals: {len(result)} from cache")
+            return result
     except Exception:
+        pass
+
+    deals: dict = {}
+
+    # ── Bulk deals ────────────────────────────────────────────────────────────
+    bulk_data = _nse_get("/api/snapshot-capital-market-largedeal")
+    if bulk_data:
+        try:
+            for item in bulk_data.get("data", []):
+                sym = str(item.get("symbol", "")).upper().strip()
+                if not sym:
+                    continue
+                qty   = float(item.get("quantity", 0) or 0)
+                price = float(item.get("price", 0) or 0)
+                side  = str(item.get("buyOrSell", "")).upper()
+                val_cr = round(qty * price / 1e7, 2)
+                if sym in deals:
+                    deals[sym]["value_cr"] += val_cr
+                else:
+                    deals[sym] = {"value_cr": val_cr, "type": "BULK", "side": side or "BUY"}
+        except Exception as e:
+            log.debug(f"Bulk deal parse: {e}")
+
+    # ── Block deals ───────────────────────────────────────────────────────────
+    # Block deals have a separate endpoint
+    block_data = _nse_get("/api/snapshot-capital-market-blockdeal")
+    if block_data:
+        try:
+            for item in block_data.get("data", []):
+                sym = str(item.get("symbol", "")).upper().strip()
+                if not sym:
+                    continue
+                qty   = float(item.get("quantity", 0) or 0)
+                price = float(item.get("price", 0) or 0)
+                side  = str(item.get("buyOrSell", "")).upper()
+                val_cr = round(qty * price / 1e7, 2)
+                if sym in deals:
+                    deals[sym]["value_cr"] += val_cr
+                    deals[sym]["type"] = "BLOCK"  # upgrade to block if both
+                else:
+                    deals[sym] = {"value_cr": val_cr, "type": "BLOCK", "side": side or "BUY"}
+        except Exception as e:
+            log.debug(f"Block deal parse: {e}")
+
+    if not deals:
+        log.info("Bulk/block deals: 0 today (market may be closed or API unavailable)")
         return {}
 
-
-def get_bulk_deal_value(stock: str) -> tuple[float | None, str | None]:
-    """
-    Returns (deal_value_cr, deal_type) for today's largest deal on a stock.
-    """
-    deals = get_bulk_deals_today()
-    stock_deals = deals.get(stock.replace(".NS",""), [])
-    if not stock_deals:
-        return None, None
-    # Find largest deal by value
-    best = max(stock_deals,
-               key=lambda d: (d.get("qty") or 0) * (d.get("price") or 0))
-    val_cr = ((best.get("qty") or 0) * (best.get("price") or 0)) / 1e7
-    return round(val_cr, 2) if val_cr > 0 else None, best.get("type")
-
-
-# ================================================================
-# NSE ANNOUNCEMENTS — earnings dates
-# ================================================================
-def fetch_nse_earnings_dates() -> dict[str, str]:
-    """
-    Fetch upcoming board meetings / results from NSE corporate actions.
-    Returns dict: {SYMBOL: date_str}
-    """
-    result = {}
+    # Cache to DB
     try:
-        import requests as req
-        headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nseindia.com/"}
-        session = req.Session()
-        session.get("https://www.nseindia.com", headers=headers, timeout=10)
-        resp = session.get(
-            "https://www.nseindia.com/api/event-calendar",
-            headers={**headers, "Accept": "application/json"},
-            timeout=15
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            for item in (data if isinstance(data, list) else []):
-                sym  = item.get("symbol","").strip().upper()
-                dt   = item.get("date","")
-                desc = item.get("purpose","").lower()
-                if sym and dt and any(k in desc for k in ["result","board","financial"]):
-                    result[sym] = dt[:10]
+        con = _get_db()
+        with _db_lock:
+            for sym, d in deals.items():
+                con.execute(
+                    "INSERT OR REPLACE INTO bulk_deals_cache "
+                    "(trade_date, symbol, value_cr, deal_type, side) VALUES (?,?,?,?,?)",
+                    (today_str, sym, d["value_cr"], d["type"], d["side"])
+                )
+            con.commit()
+    except Exception:
+        pass
+
+    log.info(f"Bulk/block deals fetched: {len(deals)} today")
+    return deals
+
+
+def has_insider_activity(sym: str, bulk_deals: dict) -> tuple[bool, float | None, str | None]:
+    """
+    Check if stock appears in today's bulk/block deals.
+
+    Parameters
+    ----------
+    sym          : stock symbol without .NS suffix (e.g. "RELIANCE")
+    bulk_deals   : dict returned by get_bulk_deals_today()
+
+    Returns (has_deal, value_cr, deal_type)
+    """
+    sym_clean = sym.upper().replace(".NS", "").replace(".BO", "").strip()
+    if sym_clean in bulk_deals:
+        d = bulk_deals[sym_clean]
+        return True, d.get("value_cr"), d.get("type", "BULK")
+    return False, None, None
+
+
+# ================================================================
+# PIOTROSKI F-SCORE  (GAP-F3)
+# 9-point scoring system from Piotroski (2000):
+#   Profitability  (4): F1 ROA>0, F2 CFO>0, F3 ΔROA>0, F4 CFO>NI (accruals)
+#   Leverage       (3): F5 ΔLeverage<0, F6 ΔCurrent ratio>0, F7 No dilution
+#   Efficiency     (2): F8 ΔGross margin>0, F9 ΔAsset turnover>0
+#
+# ≥7 = strong financials. ≤2 = weak. Used in score10 component 12.
+# ================================================================
+
+def get_piotroski_score(sym: str) -> int | None:
+    """
+    Compute Piotroski F-Score (0-9) with 7-day cache.
+    Uses yfinance annual financials — best free option for Indian equities.
+
+    Limitations:
+      - yfinance sometimes returns empty financials for Indian companies.
+      - Annual only (not trailing 12m) — slight lag for fast-growing names.
+      - Returns None (not 0) when data insufficient to score reliably.
+    """
+    # Cache read
+    cached = _cache_read_ext(sym, "piotroski", TTL_PIO)
+    if cached is not None:
+        return cached.get("score")
+
+    score = None
+    try:
+        import yfinance as yf
+        tk = yf.Ticker(sym)
+
+        income   = tk.financials      # rows = line items, cols = years
+        balance  = tk.balance_sheet
+        cashflow = tk.cashflow
+
+        if (income is None or income.empty or
+            balance is None or balance.empty or
+            cashflow is None or cashflow.empty):
+            log.debug(f"Piotroski {sym}: empty financials from yfinance")
+            _cache_write_ext(sym, "piotroski", {"score": None, "reason": "empty"})
+            return None
+
+        def gv(df: pd.DataFrame, *keys, col: int = 0) -> float | None:
+            """Get value from financial statement, trying multiple row name variants."""
+            for key in keys:
+                if key in df.index:
+                    try:
+                        v = df.loc[key].iloc[col]
+                        if v is not None and not (isinstance(v, float) and np.isnan(v)):
+                            return float(v)
+                    except Exception:
+                        continue
+            return None
+
+        # ── Current year (col 0), Prior year (col 1) ─────────────────────────
+        ni_c  = gv(income,  "Net Income", col=0)
+        ni_p  = gv(income,  "Net Income", col=1)
+        rev_c = gv(income,  "Total Revenue", "Revenue", col=0)
+        rev_p = gv(income,  "Total Revenue", "Revenue", col=1)
+        cogs_c = gv(income, "Cost Of Revenue", "Cost of Revenue", col=0) or 0
+        cogs_p = gv(income, "Cost Of Revenue", "Cost of Revenue", col=1) or 0
+
+        ta_c  = gv(balance, "Total Assets", col=0)
+        ta_p  = gv(balance, "Total Assets", col=1)
+        ltd_c = gv(balance, "Long Term Debt", "LongTermDebt", col=0) or 0
+        ltd_p = gv(balance, "Long Term Debt", "LongTermDebt", col=1) or 0
+        ca_c  = gv(balance, "Current Assets", col=0)
+        ca_p  = gv(balance, "Current Assets", col=1)
+        cl_c  = gv(balance, "Current Liabilities", col=0)
+        cl_p  = gv(balance, "Current Liabilities", col=1)
+        shr_c = gv(balance, "Ordinary Shares Number", "Share Issued", col=0)
+        shr_p = gv(balance, "Ordinary Shares Number", "Share Issued", col=1)
+
+        cfo_c = gv(cashflow, "Operating Cash Flow", "Total Cash From Operating Activities", col=0)
+
+        # Need at least net income + total assets to proceed
+        if ni_c is None or ta_c is None or ta_c <= 0:
+            _cache_write_ext(sym, "piotroski", {"score": None, "reason": "insufficient_data"})
+            return None
+
+        pts = 0
+
+        # F1: ROA > 0  (positive net income relative to assets)
+        roa_c = ni_c / ta_c
+        if roa_c > 0:
+            pts += 1
+
+        # F2: CFO > 0
+        if cfo_c is not None and cfo_c > 0:
+            pts += 1
+
+        # F3: ΔROA > 0  (improving profitability)
+        if ni_p is not None and ta_p is not None and ta_p > 0:
+            roa_p = ni_p / ta_p
+            if roa_c > roa_p:
+                pts += 1
+
+        # F4: CFO > Net Income  (quality of earnings — accruals low)
+        if cfo_c is not None and cfo_c > ni_c:
+            pts += 1
+
+        # F5: Leverage decreasing  (long-term debt / total assets)
+        if ta_p is not None and ta_p > 0:
+            lev_c = ltd_c / ta_c
+            lev_p = ltd_p / ta_p
+            if lev_c < lev_p:
+                pts += 1
+
+        # F6: Current ratio improving
+        if (ca_c and ca_p and cl_c and cl_p and cl_c > 0 and cl_p > 0):
+            cr_c = ca_c / cl_c
+            cr_p = ca_p / cl_p
+            if cr_c > cr_p:
+                pts += 1
+
+        # F7: No dilution (shares outstanding not materially increased)
+        if shr_c is not None and shr_p is not None and shr_p > 0:
+            if shr_c <= shr_p * 1.02:   # 2% tolerance for ESOP/bonus
+                pts += 1
+
+        # F8: Gross margin improving
+        if (rev_c and rev_p and rev_c > 0 and rev_p > 0):
+            gm_c = (rev_c - cogs_c) / rev_c
+            gm_p = (rev_p - cogs_p) / rev_p
+            if gm_c > gm_p:
+                pts += 1
+
+        # F9: Asset turnover improving  (revenue efficiency)
+        if (rev_c and rev_p and ta_c and ta_p and ta_p > 0):
+            at_c = rev_c / ta_c
+            at_p = rev_p / ta_p
+            if at_c > at_p:
+                pts += 1
+
+        score = pts
+        log.debug(f"Piotroski {sym}: {score}/9")
     except Exception as e:
-        log.debug(f"NSE earnings dates: {e}")
+        log.debug(f"Piotroski {sym} error: {e}")
+        score = None
+
+    _cache_write_ext(sym, "piotroski", {"score": score})
+    return score
+
+
+# ================================================================
+# PROMOTER & PLEDGE DATA  (GAP-F1 / DS2)
+# Primary source: screener.in (most reliable free source for Indian
+# shareholding pattern data — updated quarterly after BSE filings).
+# Fallback: yfinance heldPercentInsiders as proxy for promoter holding.
+# ================================================================
+
+def get_promoter_data(sym: str) -> dict:
+    """
+    Fetch promoter holding % and pledge % with 7-day cache.
+
+    Returns:
+      {
+        "promoter_pct" : float,   # % of shares held by promoters
+        "pledge_pct"   : float,   # % of promoter shares pledged
+        "source"       : str,     # "screener" | "yfinance_proxy" | "unavailable"
+      }
+
+    Note on pledge_pct semantics:
+      The scanner uses pledge_pct as % of TOTAL shares (not % of promoter shares).
+      Screener.in reports "pledged % of promoter holding" — we convert to total-shares basis
+      by multiplying by (promoter_pct / 100). This matches the interpretation in scanner.py's
+      score10 fn (GAP-F1: pledge <5% of total shares outstanding = low risk).
+    """
+    sym_clean = sym.upper().replace(".NS", "").replace(".BO", "").strip()
+    cache_key = "pledge"
+
+    cached = _cache_read_ext(sym_clean, cache_key, TTL_PLEDGE)
+    if cached is not None:
+        return cached
+
+    result = _fetch_screener_pledge(sym_clean)
+    if result["source"] == "unavailable":
+        result = _fetch_yf_pledge_proxy(sym)
+
+    _cache_write_ext(sym_clean, cache_key, result)
     return result
 
 
-# ================================================================
-# PIOTROSKI F-SCORE — computed from yfinance data
-# ================================================================
-def calc_piotroski(info: dict) -> int | None:
+def _fetch_screener_pledge(sym: str) -> dict:
     """
-    Simplified Piotroski F-Score from available yfinance data.
-    Max 6 points from available metrics (full score needs balance sheet).
+    Scrape promoter and pledge data from screener.in.
+    Tries consolidated view first, then standalone.
     """
-    score = 0
-    checks = 0
-
-    # Profitability
-    if info.get("returnOnAssets") is not None:
-        checks += 1
-        if info["returnOnAssets"] > 0: score += 1
-
-    if info.get("operatingCashflow") is not None:
-        checks += 1
-        if info["operatingCashflow"] > 0: score += 1
-
-    if info.get("earningsGrowth") is not None:
-        checks += 1
-        if info["earningsGrowth"] > 0: score += 1
-
-    # Leverage / Liquidity
-    if info.get("currentRatio") is not None:
-        checks += 1
-        if info["currentRatio"] > 1.0: score += 1
-
-    if info.get("debtToEquity") is not None:
-        checks += 1
-        if info["debtToEquity"] < 1.0: score += 1
-
-    # Operating efficiency
-    if info.get("grossMargins") is not None:
-        checks += 1
-        if info["grossMargins"] > 0.2: score += 1
-
-    return score if checks >= 3 else None
-
-
-# ================================================================
-# MAIN FETCHER — combines all sources
-# ================================================================
-def get_fundamentals(sym: str, force_refresh: bool = False) -> dict:
-    """
-    Get full fundamentals for a stock. Uses cached data if available today.
-    sym: with or without .NS suffix
-    Returns merged dict from all sources.
-    """
-    sym_ns    = sym if sym.endswith(".NS") else sym + ".NS"
-    sym_clean = sym.replace(".NS","").upper()
-
-    # Check cache
-    if not force_refresh:
+    base = {"promoter_pct": 0.0, "pledge_pct": 0.0, "source": "unavailable"}
+    urls_to_try = [
+        f"https://www.screener.in/company/{sym}/consolidated/",
+        f"https://www.screener.in/company/{sym}/",
+    ]
+    for url in urls_to_try:
         try:
-            con = _get_db()
-            row = con.execute(
-                "SELECT fund_json, updated_date FROM fund_cache WHERE stock=?",
-                (sym_ns,)
-            ).fetchone()
-            if row and row[0] and row[1] == str(_today()):
-                return json.loads(row[0])
-        except Exception:
-            pass
-
-    # Fetch from all sources
-    result = {"stock": sym_clean, "_fetched": str(_today())}
-
-    # Source 1: yfinance
-    yf_data = _fetch_yfinance(sym_ns)
-    result.update({k: v for k, v in yf_data.items() if not k.startswith("_")})
-    result["_yf_ok"] = yf_data.get("_ok", False)
-
-    # Source 2: Screener.in (only if yfinance succeeded — avoid double failures)
-    if result["_yf_ok"]:
-        try:
-            scr = _fetch_screener(sym_clean)
-            result.update({k: v for k, v in scr.items()
-                          if not k.startswith("_") and v is not None})
-            result["_scr_ok"] = scr.get("_ok", False)
-        except Exception:
-            result["_scr_ok"] = False
-    else:
-        result["_scr_ok"] = False
-
-    # Computed: Piotroski from yfinance data
-    if result["_yf_ok"]:
-        result["piotroski_score"] = calc_piotroski(yf_data)
-
-    # EPS acceleration check
-    q_eps = [result.get(f"eps_q{i}") for i in range(1, 5)]
-    if all(v is not None for v in q_eps):
-        try:
-            oldest_to_newest = list(reversed(q_eps))
-            growths = []
-            for i in range(1, len(oldest_to_newest)):
-                if oldest_to_newest[i-1] and oldest_to_newest[i-1] != 0:
-                    growths.append((oldest_to_newest[i] - oldest_to_newest[i-1])
-                                   / abs(oldest_to_newest[i-1]))
-            result["eps_accelerating"] = (
-                len(growths) >= 2 and
-                all(growths[i] > growths[i-1] for i in range(1, len(growths)))
+            resp = requests.get(
+                url, timeout=15,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                    "Accept": "text/html,application/xhtml+xml",
+                }
             )
-        except Exception:
-            pass
+            if resp.status_code == 404:
+                continue
+            if not resp.ok:
+                time.sleep(1)
+                continue
 
-    # Cache result
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            promoter_pct = 0.0
+            pledge_of_promoter = 0.0   # % of promoter holding pledged
+
+            # ── Parse shareholding pattern section ────────────────────────────
+            # screener.in renders a "Shareholding Pattern" section with a table.
+            # The table rows look like: "Promoters" | "65.23%" | ...
+            # Pledge info is shown as "% of Promoter Holding pledged" or similar.
+
+            for table in soup.find_all("table"):
+                for row in table.find_all("tr"):
+                    cells = row.find_all(["td", "th"])
+                    if not cells:
+                        continue
+                    label = cells[0].get_text(strip=True).lower()
+
+                    if "promoter" in label and "group" not in label:
+                        # First numeric value in this row = latest quarter promoter %
+                        for cell in cells[1:]:
+                            txt = cell.get_text(strip=True).replace("%", "").replace(",", "")
+                            try:
+                                v = float(txt)
+                                if 0 < v <= 100:
+                                    promoter_pct = v
+                                    break
+                            except ValueError:
+                                continue
+
+                    if "pledge" in label:
+                        for cell in cells[1:]:
+                            txt = cell.get_text(strip=True).replace("%", "").replace(",", "")
+                            try:
+                                v = float(txt)
+                                if 0 <= v <= 100:
+                                    pledge_of_promoter = v
+                                    break
+                            except ValueError:
+                                continue
+
+            # screener.in reports pledge as % of promoter holding.
+            # Convert to % of total shares:  pledge_total = pledge_of_promoter * promoter_pct / 100
+            pledge_pct_total = round(pledge_of_promoter * promoter_pct / 100, 2)
+
+            if promoter_pct > 0:
+                return {
+                    "promoter_pct": round(promoter_pct, 2),
+                    "pledge_pct": pledge_pct_total,
+                    "pledge_of_promoter_pct": round(pledge_of_promoter, 2),
+                    "source": "screener",
+                }
+        except Exception as e:
+            log.debug(f"Screener {sym}: {e}")
+            time.sleep(0.5)
+
+    return base
+
+
+def _fetch_yf_pledge_proxy(sym: str) -> dict:
+    """
+    Fallback: use yfinance heldPercentInsiders as promoter holding proxy.
+    Pledge data unavailable via yfinance for Indian equities.
+    """
     try:
-        con = _get_db()
-        with _db_lock:
-            con.execute(
-                "INSERT OR REPLACE INTO fund_cache (stock,fund_json,updated_date) VALUES (?,?,?)",
-                (sym_ns, json.dumps(result, default=str), str(_today()))
-            )
-            con.commit()
+        import yfinance as yf
+        info = yf.Ticker(sym).info or {}
+        insider_pct = info.get("heldPercentInsiders")
+        if insider_pct is not None:
+            return {
+                "promoter_pct": round(float(insider_pct) * 100, 2),
+                "pledge_pct": 0.0,   # unknown via yfinance
+                "source": "yfinance_proxy",
+            }
     except Exception:
         pass
-
-    return result
-
-
-def get_screener_cached(sym_clean: str) -> dict:
-    """Get screener data with separate screener_cache table (refreshes weekly)."""
-    try:
-        con = _get_db()
-        row = con.execute(
-            "SELECT data_json, updated_date FROM screener_cache WHERE stock=?",
-            (sym_clean,)
-        ).fetchone()
-        cutoff = str(_today() - timedelta(days=7))
-        if row and row[0] and row[1] >= cutoff:
-            return json.loads(row[0])
-    except Exception:
-        pass
-
-    data = _fetch_screener(sym_clean)
-    try:
-        con = _get_db()
-        with _db_lock:
-            con.execute(
-                "INSERT OR REPLACE INTO screener_cache (stock,data_json,updated_date) "
-                "VALUES (?,?,?)",
-                (sym_clean, json.dumps(data), str(_today()))
-            )
-            con.commit()
-    except Exception:
-        pass
-    return data
+    return {"promoter_pct": 0.0, "pledge_pct": 0.0, "source": "unavailable"}
 
 
 # ================================================================
-# SIGNAL QUALITY HELPERS — used by scanner
+# MERGED FUNDAMENTALS — called by dl_fund() enrichment
 # ================================================================
-def promoter_quality_score(fund: dict) -> float:
+
+def get_full_fundamentals(sym: str, bulk_deals: dict | None = None) -> dict:
     """
-    Score 0-1 based on promoter holding + pledging.
-    High holding + low pledging = 1.0 (institutional confidence)
-    Low holding + high pledging = 0.0 (danger zone)
+    Return all supplemental fundamentals for a stock.
+    Designed to be called from dl_fund() after the yfinance base fetch.
+
+    Parameters
+    ----------
+    sym          : ticker with .NS suffix (e.g. "RELIANCE.NS")
+    bulk_deals   : pre-fetched dict from get_bulk_deals_today() — pass in to avoid
+                   redundant API calls (one global fetch per scan, not per stock).
+
+    Returns dict ready to merge into the fund dict in scanner.py:
+      {
+        "piotroski_score"  : int|None,
+        "scr_pledging_pct" : float,
+        "scr_promoter_pct" : float,
+        "bulk_deal_cr"     : float|None,   # if deal today
+        "bulk_deal_type"   : str|None,
+        "_fund_ext_ok"     : bool,
+      }
     """
-    # Try Screener.in data first, yfinance insider as fallback
-    promoter_pct = fund.get("scr_promoter_pct") or (
-        (fund.get("insider_holding_pct") or 0) * 100
-    )
-    pledging_pct = fund.get("scr_pledging_pct") or 0
+    sym_clean = sym.replace(".NS", "").replace(".BO", "").upper()
 
-    # Promoter holding score: 50%+ = good, below 30% = bad
-    ph_score = min(max((promoter_pct - 30) / 40, 0), 1) if promoter_pct else 0.5
+    # Piotroski (7-day cached, does yfinance financials call internally)
+    pio = get_piotroski_score(sym)
 
-    # Pledging penalty: 0% = no penalty, 30%+ = max penalty
-    pledge_penalty = min(pledging_pct / 30, 1) if pledging_pct else 0
+    # Promoter / pledge (7-day cached, does screener.in scrape internally)
+    pledge_data = get_promoter_data(sym)
 
-    return round(ph_score * (1 - pledge_penalty * 0.5), 3)
+    # Bulk deals (caller pre-fetched and passes in — no extra API call)
+    bulk_deal_cr   = None
+    bulk_deal_type = None
+    if bulk_deals:
+        has_deal, val_cr, deal_type = has_insider_activity(sym_clean, bulk_deals)
+        if has_deal:
+            bulk_deal_cr   = val_cr
+            bulk_deal_type = deal_type
 
-
-def earnings_quality_score(fund: dict) -> float:
-    """
-    Score 0-1 based on earnings acceleration and growth quality.
-    """
-    score = 0.5  # neutral base
-
-    eps_growth = fund.get("eps_growth_qoq") or fund.get("eps_growth_yoy") or 0
-    rev_growth = fund.get("revenue_growth_yoy") or fund.get("scr_revenue_growth_3yr") or 0
-    roe        = fund.get("roe") or fund.get("scr_roe") or 0
-    if isinstance(roe, (int, float)) and roe > 1:
-        roe = roe / 100  # normalize if in percent
-
-    # Bonuses
-    if eps_growth > 0.25:  score += 0.15
-    if eps_growth > 0.50:  score += 0.10
-    if rev_growth > 0.20:  score += 0.10
-    if rev_growth > 0.40:  score += 0.10
-    if roe > 0.20:         score += 0.10
-    if fund.get("eps_accelerating"): score += 0.15
-    p = fund.get("piotroski_score")
-    if p is not None:
-        if p >= 5: score += 0.10
-        if p <= 2: score -= 0.20
-
-    return round(min(max(score, 0), 1), 3)
-
-
-def is_low_float(fund: dict) -> bool:
-    """Qullamaggie's key filter: float < 20% of outstanding shares."""
-    ff = fund.get("free_float_pct")
-    if ff is not None:
-        return ff < 20
-    # Approximate from institutions
-    inst = fund.get("inst_holding_pct") or 0
-    insider = fund.get("insider_holding_pct") or 0
-    return (inst + insider) > 0.80
-
-
-def has_insider_activity(stock_clean: str, deals_today: dict) -> tuple[bool, float | None, str | None]:
-    """
-    Check if stock has bulk/block deal today.
-    Returns (has_deal, deal_value_cr, deal_type)
-    """
-    deals = deals_today.get(stock_clean.upper(), [])
-    if not deals:
-        return False, None, None
-    best = max(deals, key=lambda d: (d.get("qty") or 0) * (d.get("price") or 0))
-    val = ((best.get("qty") or 0) * (best.get("price") or 0)) / 1e7
-    return True, round(val, 2) if val > 0 else None, best.get("type")
+    return {
+        "piotroski_score"  : pio,
+        "scr_pledging_pct" : pledge_data.get("pledge_pct", 0.0),
+        "scr_promoter_pct" : pledge_data.get("promoter_pct", 0.0),
+        "bulk_deal_cr"     : bulk_deal_cr,
+        "bulk_deal_type"   : bulk_deal_type,
+        "_fund_ext_ok"     : True,
+    }
 
 
 # ================================================================
-# BATCH REFRESH — called by data_updater
+# BATCH PRE-FETCH — call from data_updater --daily (GAP-IR5 partial fix)
+# Pre-warms Piotroski + pledge cache for all stocks so scan_stock()
+# reads from cache without live API calls during the scan window.
 # ================================================================
-def batch_refresh_fundamentals(stocks: list[str], workers: int = 4):
+
+def prefetch_fundamentals(stocks: list[str], workers: int = 2, delay: float = 1.0):
     """
-    Refresh fundamentals for a list of stocks.
-    Skips stocks already fetched today.
+    Pre-fetch Piotroski + pledge data for a list of stocks.
+    Call from data_updater --daily BEFORE scanner.py --daily runs.
+
+    workers=2, delay=1.0s: conservative rate-limiting for screener.in.
+    Screener.in blocks aggressive scrapers; 1 req/sec is safe.
+
+    Stocks already in cache (within TTL) are skipped automatically.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    today = str(_today())
-    con   = _get_db()
 
-    # Find which need refresh
-    need_refresh = []
+    today = date.today()
+    need = []
     for sym in stocks:
-        sym_ns = sym if sym.endswith(".NS") else sym + ".NS"
-        try:
-            row = con.execute(
-                "SELECT updated_date FROM fund_cache WHERE stock=?", (sym_ns,)
-            ).fetchone()
-            if not row or row[0] != today:
-                need_refresh.append(sym_ns)
-        except Exception:
-            need_refresh.append(sym_ns)
+        sym_clean = sym.replace(".NS", "").upper()
+        # Check if both piotroski and pledge are cached and fresh
+        pio_cached    = _cache_read_ext(sym_clean, "piotroski", TTL_PIO)
+        pledge_cached = _cache_read_ext(sym_clean, "pledge", TTL_PLEDGE)
+        if pio_cached is None or pledge_cached is None:
+            need.append(sym)
 
-    if not need_refresh:
-        log.info("Fundamentals: all up to date")
+    log.info(f"Fundamentals pre-fetch: {len(need)}/{len(stocks)} need update")
+    if not need:
         return
 
-    log.info(f"Fundamentals: refreshing {len(need_refresh)}/{len(stocks)} stocks")
     done = 0
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(get_fundamentals, s): s for s in need_refresh}
-        for fut in as_completed(futs):
+    errors = 0
+    for sym in need:
+        try:
+            sym_clean = sym.replace(".NS", "").upper()
+            # Piotroski — yfinance, usually faster
+            pio = get_piotroski_score(sym)
+            # Pledge — screener.in, needs rate limiting
+            pledge_data = get_promoter_data(sym_clean)
             done += 1
-            try:
-                fut.result()
-            except Exception:
-                pass
-            if done % 100 == 0:
-                log.info(f"  Fundamentals: {done}/{len(need_refresh)}")
-    log.info(f"Fundamentals refresh done: {len(need_refresh)} stocks")
+            if done % 50 == 0:
+                log.info(f"  Fundamentals: {done}/{len(need)} done")
+        except Exception as e:
+            errors += 1
+            log.debug(f"Prefetch {sym}: {e}")
+        time.sleep(delay)   # conservative rate limit for screener.in
+
+    log.info(f"Fundamentals pre-fetch complete: {done} ok, {errors} errors")
 
 
+# ================================================================
+# CLI — manual invocation for testing
+# ================================================================
 if __name__ == "__main__":
-    import sys, pprint
-    sym = sys.argv[1] if len(sys.argv) > 1 else "RELIANCE.NS"
-    print(f"\nFetching fundamentals for {sym}...")
-    data = get_fundamentals(sym, force_refresh=True)
-    pprint.pprint(data)
-    print(f"\nBulk deals today: {get_bulk_deals_today()}")
+    import argparse
+    logging.basicConfig(level=logging.DEBUG,
+                        format="%(asctime)s %(levelname)-5s %(message)s")
+
+    ap = argparse.ArgumentParser(description="Fundamentals data tool")
+    ap.add_argument("--bulk",    action="store_true", help="Fetch today's bulk/block deals")
+    ap.add_argument("--pio",     metavar="SYM",       help="Piotroski score for symbol")
+    ap.add_argument("--pledge",  metavar="SYM",       help="Promoter/pledge data for symbol")
+    ap.add_argument("--full",    metavar="SYM",       help="Full fundamentals for symbol")
+    ap.add_argument("--prefetch",metavar="FILE",      help="Prefetch for symbols in file (one per line)")
+    args = ap.parse_args()
+
+    if args.bulk:
+        deals = get_bulk_deals_today()
+        print(f"\nBulk/Block deals today: {len(deals)}")
+        for sym, d in sorted(deals.items(), key=lambda x: -x[1]["value_cr"])[:20]:
+            print(f"  {sym:<15} {d['type']:<6} {d['side']:<5} ₹{d['value_cr']:.1f}Cr")
+
+    if args.pio:
+        sym = args.pio.upper()
+        if not sym.endswith(".NS"):
+            sym += ".NS"
+        score = get_piotroski_score(sym)
+        print(f"\nPiotroski {sym}: {score}/9")
+
+    if args.pledge:
+        sym = args.pledge.upper().replace(".NS", "")
+        data = get_promoter_data(sym)
+        print(f"\nPromoter data {sym}: {data}")
+
+    if args.full:
+        sym = args.full.upper()
+        if not sym.endswith(".NS"):
+            sym += ".NS"
+        deals = get_bulk_deals_today()
+        data = get_full_fundamentals(sym, bulk_deals=deals)
+        print(f"\nFull fundamentals {sym}:")
+        for k, v in data.items():
+            print(f"  {k}: {v}")
+
+    if args.prefetch:
+        with open(args.prefetch) as f:
+            stocks = [line.strip() for line in f if line.strip()]
+        prefetch_fundamentals(stocks)
