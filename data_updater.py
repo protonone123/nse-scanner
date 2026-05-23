@@ -73,9 +73,57 @@ def _now():  return datetime.now(_IST)
 def _today(): return _now().date()
 def _ist(fmt="%H:%M IST"): return _now().strftime(fmt)
 
-MAX_WORKERS   = 5    # FIX: was 10 — too aggressive, causes YFRateLimitError on CI
-DL_RETRIES    = 3
-DL_BACKOFF    = 3.0
+MAX_WORKERS   = 4      # was 5 — further reduced; semaphore is the real limiter now
+DL_RETRIES    = 6      # was 3 — more attempts with backoff
+DL_BACKOFF    = 2.0
+
+# ================================================================
+# YAHOO FINANCE RATE-LIMIT MANAGEMENT
+# ================================================================
+# Mirrors scanner.py rate-limit system. Both files share the same
+# Yahoo Finance IP — hitting limits in data_updater affects scanner
+# and vice versa when run in the same process/container.
+#
+# Three-layer defence:
+#   1. _YF_SEMAPHORE  — max 2 concurrent Yahoo calls (not per-worker)
+#   2. _YF_COOLDOWN_UNTIL — epoch time; all threads pause until cleared
+#   3. Full-jitter exponential backoff — desynchronises retry bursts
+# ================================================================
+import threading as _threading
+import random    as _random
+
+_YF_SEMAPHORE      = _threading.Semaphore(2)
+_YF_COOLDOWN_LOCK  = _threading.Lock()
+_YF_COOLDOWN_UNTIL = 0.0
+
+def _yf_wait_cooldown():
+    remaining = _YF_COOLDOWN_UNTIL - time.time()
+    if remaining > 0:
+        log.debug(f"Cooldown wait: {remaining:.1f}s")
+        time.sleep(remaining + _random.uniform(0, 1.5))
+
+def _yf_trigger_cooldown(base_wait: float):
+    global _YF_COOLDOWN_UNTIL
+    with _YF_COOLDOWN_LOCK:
+        proposed = time.time() + base_wait
+        if proposed > _YF_COOLDOWN_UNTIL:
+            _YF_COOLDOWN_UNTIL = proposed
+            log.warning(f"Rate-limit cooldown: {base_wait:.0f}s")
+
+def _jittered_backoff(attempt: int, base: float = 8.0, cap: float = 120.0) -> float:
+    """Full-jitter exponential backoff. sleep = random(0, min(cap, base * 2^attempt))."""
+    return _random.uniform(0, min(cap, base * (2 ** attempt)))
+
+def _is_rate_limit(e: Exception) -> bool:
+    etype = type(e).__name__
+    msg   = str(e).lower()
+    return (
+        "YFRateLimitError" in etype or
+        "429" in str(e) or
+        "rate limit" in msg or
+        "too many" in msg or
+        "try after" in msg
+    )
 MARKET_OPEN   = (9, 15)    # IST
 MARKET_CLOSE  = (15, 30)   # IST
 
@@ -163,73 +211,79 @@ def _normalize_df_index(df: pd.DataFrame) -> pd.DataFrame:
 
 def dl(sym: str, interval: str = "1d", period: str = "1y") -> pd.DataFrame | None:
     for attempt in range(DL_RETRIES):
+        _yf_wait_cooldown()
         try:
-            sess = _get_session()
-            kw = {"session": sess} if sess else {}
-            import contextlib, io as _io
-            with contextlib.redirect_stderr(_io.StringIO()):  # suppress yfinance delisted noise
-                df = yf.download(sym, period=period, interval=interval,
-                                 auto_adjust=True, progress=False, timeout=25, **kw)
+            with _YF_SEMAPHORE:
+                sess = _get_session()
+                kw = {"session": sess} if sess else {}
+                import contextlib, io as _io
+                with contextlib.redirect_stderr(_io.StringIO()):
+                    df = yf.download(sym, period=period, interval=interval,
+                                     auto_adjust=True, progress=False, timeout=25, **kw)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
-            df = _normalize_df_index(df)   # CRASH FIX: handles ISO 8601 timestamps
+            df = _normalize_df_index(df)
             df = df.dropna()
             return df if len(df) > 0 else None
         except Exception as e:
             msg = str(e)
-            if "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
-                log.debug(f"ISO timestamp error {sym} attempt {attempt+1} — reset")
-                _reset_session(); time.sleep(3 * (attempt + 1))
+            if _is_rate_limit(e):
+                wait = _jittered_backoff(attempt, base=20.0, cap=180.0)
+                _yf_trigger_cooldown(wait)
+                log.warning(f"RateLimit dl {sym} attempt {attempt+1} — cooldown {wait:.0f}s")
+                time.sleep(wait)
             elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
                 log.warning(f"401 {sym} attempt {attempt+1} — reset session")
-                _reset_session(); time.sleep(8)
-            elif "429" in msg or "rate limit" in msg.lower() or "too many" in msg.lower():
-                wait = 15 * (attempt + 1)  # 15s, 30s, 45s
-                log.warning(f"RateLimit {sym} attempt {attempt+1} — wait {wait}s")
-                time.sleep(wait)
-            elif "delisted" in msg.lower() or "no price data" in msg.lower():
-                log.debug(f"Skip {sym} {interval}: delisted/no data")
-                return None  # don't retry delisted stocks
-            elif attempt < DL_RETRIES - 1:
-                time.sleep(DL_BACKOFF * (attempt + 1))
-    return None
-
-def dl_since(sym: str, interval: str, since_date: str) -> pd.DataFrame | None:
-    """Download bars only since a given date. Uses yfinance start parameter.
-    BUG7 FIX: was missing 429/rate-limit handling — a single 429 during incremental
-    update would silently return None, corrupting the cache for that stock.
-    Now mirrors the full retry/backoff logic from dl().
-    """
-    for attempt in range(DL_RETRIES):
-        try:
-            sess = _get_session()
-            kw = {"session": sess} if sess else {}
-            import contextlib, io as _io
-            with contextlib.redirect_stderr(_io.StringIO()):
-                df = yf.download(sym, start=since_date, interval=interval,
-                                 auto_adjust=True, progress=False, timeout=25, **kw)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            df = _normalize_df_index(df)   # CRASH FIX: ISO timestamp normalization
-            df = df.dropna()
-            return df if len(df) > 0 else None
-        except Exception as e:
-            msg = str(e)
-            if "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
-                log.debug(f"ISO timestamp error {sym} dl_since attempt {attempt+1}")
-                _reset_session(); time.sleep(3 * (attempt + 1))
-            elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
-                log.warning(f"401 {sym} dl_since attempt {attempt+1} — reset session")
-                _reset_session(); time.sleep(8)
-            elif "429" in msg or "rate limit" in msg.lower() or "too many" in msg.lower():
-                wait = 15 * (attempt + 1)   # 15s, 30s, 45s — same as dl()
-                log.warning(f"RateLimit {sym} dl_since attempt {attempt+1} — wait {wait}s")
-                time.sleep(wait)
+                _reset_session()
+                time.sleep(_jittered_backoff(attempt, base=8.0))
+            elif "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
+                log.debug(f"ISO timestamp {sym} attempt {attempt+1} — reset")
+                _reset_session()
+                time.sleep(3 * (attempt + 1))
             elif "delisted" in msg.lower() or "no price data" in msg.lower():
                 log.debug(f"Skip {sym} {interval}: delisted/no data")
                 return None
             elif attempt < DL_RETRIES - 1:
-                time.sleep(DL_BACKOFF * (attempt + 1))
+                time.sleep(_jittered_backoff(attempt, base=DL_BACKOFF))
+    return None
+
+def dl_since(sym: str, interval: str, since_date: str) -> pd.DataFrame | None:
+    """Download bars only since a given date. Uses yfinance start parameter."""
+    for attempt in range(DL_RETRIES):
+        _yf_wait_cooldown()
+        try:
+            with _YF_SEMAPHORE:
+                sess = _get_session()
+                kw = {"session": sess} if sess else {}
+                import contextlib, io as _io
+                with contextlib.redirect_stderr(_io.StringIO()):
+                    df = yf.download(sym, start=since_date, interval=interval,
+                                     auto_adjust=True, progress=False, timeout=25, **kw)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            df = _normalize_df_index(df)
+            df = df.dropna()
+            return df if len(df) > 0 else None
+        except Exception as e:
+            msg = str(e)
+            if _is_rate_limit(e):
+                wait = _jittered_backoff(attempt, base=20.0, cap=180.0)
+                _yf_trigger_cooldown(wait)
+                log.warning(f"RateLimit dl_since {sym} attempt {attempt+1} — cooldown {wait:.0f}s")
+                time.sleep(wait)
+            elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
+                log.warning(f"401 {sym} dl_since attempt {attempt+1} — reset session")
+                _reset_session()
+                time.sleep(_jittered_backoff(attempt, base=8.0))
+            elif "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
+                log.debug(f"ISO timestamp {sym} dl_since attempt {attempt+1}")
+                _reset_session()
+                time.sleep(3 * (attempt + 1))
+            elif "delisted" in msg.lower() or "no price data" in msg.lower():
+                log.debug(f"Skip {sym} {interval}: delisted/no data")
+                return None
+            elif attempt < DL_RETRIES - 1:
+                time.sleep(_jittered_backoff(attempt, base=DL_BACKOFF))
     return None
 
 # ================================================================
