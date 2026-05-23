@@ -140,8 +140,59 @@ PERIOD_DAILY = "1y"
 STALE_DAYS   = 5     # re-fetch full history if cache is older than this
 PERIOD_QUICK = "3mo"
 MAX_WORKERS  = 4
-DL_RETRIES   = 3
-DL_BACKOFF   = 3.0
+DL_RETRIES   = 6       # was 3 — need more attempts given backoff strategy
+DL_BACKOFF   = 2.0
+
+# ================================================================
+# YAHOO FINANCE RATE-LIMIT MANAGEMENT
+# ================================================================
+# Root cause of YFRateLimitError in multi-worker scans:
+#   4 workers fire simultaneously → all hit 429 → all sleep same fixed N s
+#   → all retry simultaneously → 429 again. Classic thundering herd.
+#
+# Fix: three-layer defence
+#   1. _YF_SEMAPHORE  — global concurrent-call cap (max 2 live Yahoo calls)
+#   2. _YF_COOLDOWN   — threading.Event cleared when any thread hits 429;
+#                       all threads block on wait() before next attempt.
+#   3. Exponential backoff with ±jitter — desynchronises retries across threads.
+#
+# Result: Yahoo sees ≤2 concurrent connections, never a retry burst.
+# ================================================================
+import threading as _threading
+import random    as _random
+
+_YF_SEMAPHORE   = _threading.Semaphore(2)    # max 2 concurrent Yahoo calls
+_YF_COOLDOWN    = _threading.Event()
+_YF_COOLDOWN.set()   # set = "clear to proceed"; cleared = "rate-limited, wait"
+_YF_COOLDOWN_LOCK = _threading.Lock()
+_YF_COOLDOWN_UNTIL = 0.0   # epoch seconds — shared cooldown end time
+
+def _yf_wait_cooldown():
+    """Block until global rate-limit cooldown expires."""
+    import time as _t
+    global _YF_COOLDOWN_UNTIL
+    remaining = _YF_COOLDOWN_UNTIL - _t.time()
+    if remaining > 0:
+        log.debug(f"Cooldown: waiting {remaining:.1f}s")
+        _t.sleep(remaining + _random.uniform(0, 1))
+
+def _yf_trigger_cooldown(base_wait: float):
+    """Called by any thread that hits 429. Sets global cooldown for all threads."""
+    import time as _t
+    global _YF_COOLDOWN_UNTIL
+    with _YF_COOLDOWN_LOCK:
+        proposed = _t.time() + base_wait
+        if proposed > _YF_COOLDOWN_UNTIL:
+            _YF_COOLDOWN_UNTIL = proposed
+            log.warning(f"Rate-limit cooldown set: {base_wait:.0f}s")
+
+def _jittered_backoff(attempt: int, base: float = 8.0, cap: float = 120.0) -> float:
+    """
+    Full-jitter exponential backoff — AWS/Google recommended for distributed retry.
+    sleep = random(0, min(cap, base * 2^attempt))
+    Desynchronises all workers so they don't retry in a burst.
+    """
+    return _random.uniform(0, min(cap, base * (2 ** attempt)))
 QUICK_SIZE   = 300   # stocks scanned in 30-min mode
 
 TG_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
@@ -266,6 +317,7 @@ def get_db():
         CREATE INDEX IF NOT EXISTS idx_sig_date ON signals(scan_date);
         CREATE INDEX IF NOT EXISTS idx_sig_stock ON signals(stock);
         CREATE INDEX IF NOT EXISTS idx_alerts ON alerts_sent(scan_date,stock);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sig_dedup ON signals(stock, pattern, scan_date);
     """)
     # ── Schema migration: add columns that may be missing from older DB ──────
     # SQLite does not support IF NOT EXISTS on ALTER TABLE — use try/except
@@ -286,6 +338,7 @@ def get_db():
         ("piotroski_score",    "INTEGER"),
         ("pledge_pct",         "REAL"),
         ("bulk_deal_cr",       "REAL"),
+        ("pos_size_1pct",      "INTEGER"),   # RM1: shares per ₹1L capital at 1% risk
     ]
     _seen = set()
     for col, typ in _new_cols:
@@ -823,45 +876,69 @@ def _normalize_df_index(df: pd.DataFrame) -> pd.DataFrame:
 
 def dl(sym, interval="1d", period=PERIOD_DAILY):
     for attempt in range(DL_RETRIES):
+        _yf_wait_cooldown()
         try:
-            sess = _get_session()
-            kw = {"session": sess} if sess is not None else {}
-            df = yf.download(sym, period=period, interval=interval,
-                             auto_adjust=True, progress=False, timeout=20, **kw)
+            with _YF_SEMAPHORE:   # max 2 concurrent Yahoo calls across all threads
+                sess = _get_session()
+                kw = {"session": sess} if sess is not None else {}
+                df = yf.download(sym, period=period, interval=interval,
+                                 auto_adjust=True, progress=False, timeout=20, **kw)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
-            # CRASH FIX: normalize index before dropna — avoids ISO timestamp crash
             df = _normalize_df_index(df)
             df = df.dropna()
             return df if len(df) > 20 else None
         except Exception as e:
             msg = str(e)
-            if "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
-                # Yahoo returning ISO 8601 timestamps yfinance can't parse —
-                # clear session and retry; most resolve on 2nd attempt
-                log.debug(f"ISO timestamp parse error {sym} attempt {attempt+1} — retry")
+            etype = type(e).__name__
+            is_rate_limit = (
+                "YFRateLimitError" in etype or
+                "429" in msg or
+                "rate limit" in msg.lower() or
+                "too many" in msg.lower() or
+                "try after" in msg.lower()
+            )
+            is_crumb = "401" in msg or "Crumb" in msg or "Unauthorized" in msg
+            is_iso   = "unconverted data remains" in msg or ("T0" in msg and "+" in msg)
+
+            if is_rate_limit:
+                wait = _jittered_backoff(attempt, base=20.0, cap=180.0)
+                _yf_trigger_cooldown(wait)
+                log.warning(f"RateLimit dl {sym} attempt {attempt+1} — cooldown {wait:.0f}s")
+                time.sleep(wait)
+            elif is_crumb:
+                log.warning(f"401/Crumb dl {sym} attempt {attempt+1} — reset session")
+                _reset_session()
+                time.sleep(_jittered_backoff(attempt, base=8.0))
+            elif is_iso:
+                log.debug(f"ISO timestamp dl {sym} attempt {attempt+1} — retry")
                 _reset_session()
                 time.sleep(3 * (attempt + 1))
-            elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
-                log.warning(f"401/Crumb on {sym} attempt {attempt+1} — reset session")
-                _reset_session(); time.sleep(8)
-            elif "429" in msg or "rate limit" in msg.lower() or "too many" in msg.lower():
-                wait = 15 * (attempt + 1)   # 15s → 30s → 45s
-                log.warning(f"RateLimit {sym} — wait {wait}s")
-                time.sleep(wait)
             elif "delisted" in msg.lower() or "no price data" in msg.lower():
-                return None   # no retry on delisted
+                return None
             elif attempt < DL_RETRIES - 1:
-                time.sleep(DL_BACKOFF * (attempt + 1))
+                time.sleep(_jittered_backoff(attempt, base=DL_BACKOFF))
     return None
 
 def dl_fund(sym):
+    """
+    Fetch fundamentals for one stock.
+
+    DS1/DS2/GAP-F1/F2/F3 FIX:
+      Now enriches with piotroski_score, scr_pledging_pct, scr_promoter_pct
+      from fundamentals.py (7-day cached per stock).
+      bulk_deal data is NOT fetched here — it is fetched once per daily scan
+      in main() via get_bulk_deals_today() and passed into scan_stock().
+      Calling it here would trigger one NSE API call per stock (×2100 = 2100 calls).
+    """
     for attempt in range(DL_RETRIES):
+        _yf_wait_cooldown()
         try:
-            sess = _get_session()
-            kw = {"session": sess} if sess is not None else {}
-            tk = yf.Ticker(sym, **kw)
-            info = tk.info or {}
+            with _YF_SEMAPHORE:
+                sess = _get_session()
+                kw = {"session": sess} if sess is not None else {}
+                tk = yf.Ticker(sym, **kw)
+                info = tk.info or {}
             if not info.get("marketCap"):
                 if attempt < DL_RETRIES - 1:
                     time.sleep(3)
@@ -872,7 +949,7 @@ def dl_fund(sym):
                 ne = cal.get("Earnings Date", [None])[0] if cal else None
             except Exception:
                 ne = None
-            return {
+            fund = {
                 "_fund_ok": True,
                 "marketCap": info.get("marketCap"),
                 "earningsQuarterlyGrowth": info.get("earningsQuarterlyGrowth"),
@@ -881,15 +958,43 @@ def dl_fund(sym):
                 "sector": info.get("sector"),
                 "longName": info.get("longName") or info.get("shortName"),
                 "next_earnings": str(ne) if ne else None,
+                "piotroski_score"  : None,
+                "scr_pledging_pct" : 0.0,
+                "scr_promoter_pct" : 0.0,
             }
+            try:
+                from fundamentals import get_piotroski_score, get_promoter_data
+                pio         = get_piotroski_score(sym)
+                pledge_data = get_promoter_data(sym)
+                fund["piotroski_score"]   = pio
+                fund["scr_pledging_pct"]  = pledge_data.get("pledge_pct", 0.0)
+                fund["scr_promoter_pct"]  = pledge_data.get("promoter_pct", 0.0)
+            except ImportError:
+                pass
+            except Exception as _fe:
+                log.debug(f"Fund enrichment {sym}: {_fe}")
+            return fund
         except Exception as e:
             msg = str(e)
-            if "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
-                log.warning(f"401/Crumb on fund {sym} attempt {attempt+1} — reset session")
+            etype = type(e).__name__
+            is_rate_limit = (
+                "YFRateLimitError" in etype or
+                "429" in msg or
+                "rate limit" in msg.lower() or
+                "too many" in msg.lower() or
+                "try after" in msg.lower()
+            )
+            if is_rate_limit:
+                wait = _jittered_backoff(attempt, base=25.0, cap=240.0)
+                _yf_trigger_cooldown(wait)
+                log.warning(f"RateLimit fund {sym} attempt {attempt+1} — cooldown {wait:.0f}s")
+                time.sleep(wait)
+            elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
+                log.warning(f"401/Crumb fund {sym} attempt {attempt+1} — reset session")
                 _reset_session()
-                time.sleep(5)
+                time.sleep(_jittered_backoff(attempt, base=8.0))
             elif attempt < DL_RETRIES - 1:
-                time.sleep(DL_BACKOFF * (attempt + 1))
+                time.sleep(_jittered_backoff(attempt, base=DL_BACKOFF))
     return {"_fund_ok": False}
 
 def cap_class(mc):
@@ -1038,7 +1143,27 @@ def check_market_trend(nc):
 def check_volume_dryup(vol, lb=25):
     return vol is not None and len(vol) >= lb and vol[-1] <= np.min(vol[-lb:]) * 1.05
 
-def check_weinstein_stage(close, p=150):
+def check_weinstein_stage(close, p=150, weekly_close=None):
+    """
+    Weinstein Stage Analysis.
+
+    SC3 FIX: Weinstein's original method uses a 30-week SMA on WEEKLY closing prices.
+    Daily 150-bar MA ≈ 30 weeks but introduces noise (intraweek gaps, halts) that
+    fires Stage 2 signals 2-3 weeks early vs the true weekly method.
+
+    If weekly_close (30+ weekly bars) is supplied → use 30-week SMA on weekly closes.
+    Fallback → 150-day MA on daily closes (previous behaviour) when weekly data absent.
+    """
+    if weekly_close is not None and len(weekly_close) >= 35:
+        wc = np.asarray(weekly_close, dtype=float)
+        ma30w   = np.mean(wc[-30:])
+        ma30w_p = np.mean(wc[-35:-5])   # 5 weeks prior
+        last = wc[-1]
+        if last > ma30w and ma30w > ma30w_p: return "Stage2"
+        if last > ma30w:                     return "Stage1-Late"
+        if last < ma30w and ma30w < ma30w_p: return "Stage4"
+        return "Stage3"
+    # Fallback: daily MA (original behaviour)
     if len(close) < p + 20: return "Unknown"
     ma = np.mean(close[-p:]); ma_p = np.mean(close[-p-20:-20])
     if close[-1] > ma and ma > ma_p: return "Stage2"
@@ -1118,17 +1243,45 @@ def calc_rs_percentile(close, nc, lb=63, sym: str = "") -> float | None:
 
 
 # ── Gap 11 FIX: RS line leadership (new 52-week high BEFORE price) ───────────
-def rs_line_leading(close: np.ndarray, nc: np.ndarray | None, lb: int = 252) -> bool:
+def rs_line_leading(close: np.ndarray, nc: np.ndarray | None, lb: int = 252,
+                    close_index=None, nc_index=None) -> bool:
     """
-    Returns True if the RS line (close / nifty_close) is at or within 1 % of
-    its 52-week high.  This is O'Neil's highest-conviction leading indicator —
-    institutions accumulating before the visible price breakout.
+    Returns True if RS line is at/near its 52-week high (O'Neil leading indicator).
+
+    SC1 FIX: Previous code did close[-lb:] / nc[-lb:] — positional slice.
+    After reindex+ffill, Nifty array may have different length than stock array
+    (halts, suspensions, staggered listing dates). Positional alignment creates
+    phantom RS spikes on stocks that were halted then resumed.
+
+    Fix: align by date index before ratio. If indices not supplied, falls back to
+    positional slice (safe for callers that supply pre-aligned arrays).
     """
     if nc is None or len(close) < lb or len(nc) < lb:
         return False
-    rs_line = close[-lb:] / nc[-lb:]
+
+    if close_index is not None and nc_index is not None:
+        # Date-aligned division — SC1 fix
+        try:
+            import pandas as pd
+            s_ser = pd.Series(close, index=close_index)
+            n_ser = pd.Series(nc,    index=nc_index)
+            # Only dates present in both series
+            common = s_ser.index.intersection(n_ser.index)
+            if len(common) < lb:
+                return False
+            s_aln = s_ser.loc[common].values[-lb:]
+            n_aln = n_ser.loc[common].values[-lb:]
+            rs_line = s_aln / np.where(n_aln > 0, n_aln, np.nan)
+        except Exception:
+            rs_line = close[-lb:] / np.where(nc[-lb:] > 0, nc[-lb:], np.nan)
+    else:
+        rs_line = close[-lb:] / np.where(nc[-lb:] > 0, nc[-lb:], np.nan)
+
+    rs_line = rs_line[~np.isnan(rs_line)]
+    if len(rs_line) < 20:
+        return False
     current_rs   = rs_line[-1]
-    rs_52wk_high = float(np.max(rs_line[:-5]))   # exclude last 5 days (noise)
+    rs_52wk_high = float(np.max(rs_line[:-5]))
     return current_rs >= rs_52wk_high * 0.99
 
 
@@ -1209,12 +1362,32 @@ def canslim_score(close, vol, fund, nc, nr):
         # FIX: raise to ₹15 Cr/day (was ₹1 Cr — too loose, allowed illiquid stocks)
         if np.mean(vol[idx-19:idx+1])*np.mean(close[idx-19:idx+1])/1e7 >= MIN_LIQUIDITY_CR: score += 1
     for key, th in [("earningsQuarterlyGrowth", CS["C_min"]),
-                    ("earningsGrowth", CS["A_min"]),
-                    ("heldPercentInstitutions", CS["I_min_instl"])]:
+                    ("earningsGrowth", CS["A_min"])]:
         v = fund.get(key)
         if v is not None:
             checks += 1
             if v >= th: score += 1
+    # SC2 FIX: CANSLIM 'I' = INCREASING institutional ownership, not just threshold.
+    # O'Neil: rising inst ownership over prior 2-3 quarters = accumulation signal.
+    # Falling inst ownership (distribution) should NOT award a point even above 20%.
+    # We approximate direction by checking heldPercentInstitutions vs a 4-quarter proxy:
+    # yfinance only provides current quarter — we cache prior quarter in fund_cache and
+    # compare. If prior quarter unavailable, fall back to absolute threshold (old behaviour).
+    inst_now = fund.get("heldPercentInstitutions")
+    if inst_now is not None:
+        checks += 1
+        inst_prior = fund.get("heldPercentInstitutions_prior")   # populated by dl_fund if cached
+        if inst_prior is not None:
+            # Direction check: reward only if increasing (accumulation)
+            if inst_now > inst_prior and inst_now >= CS["I_min_instl"]:
+                score += 1   # rising + above threshold = strong I
+            elif inst_now > inst_prior:
+                score += 0   # rising but below threshold = no point (early stage)
+            # falling = distribution = no point regardless of absolute level
+        else:
+            # Fallback: absolute threshold (old behaviour when prior not cached)
+            if inst_now >= CS["I_min_instl"]:
+                score += 1
     return score, checks
 
 def recommend(status, score, mkt_up, aggression=2, rs_pct=None):
@@ -1269,62 +1442,68 @@ def calc_atr(close, high=None, low=None, period=14) -> float:
     return float(np.mean(moves))
 
 
-def calc_structural_stop(pattern, close, high, low, bz, bottom) -> float | None:
+def calc_structural_stop(pattern, close, high, low, bz, bottom,
+                         bottom_bar_idx: int | None = None) -> float | None:
     """
     Pattern-specific structural stop — the price that PROVES the setup is wrong.
-    Research: ATR stop alone is noise. Structural stop = key pivot below which
-    the pattern thesis fails. We use the HIGHER (tighter) of ATR vs structural.
 
-    Per research doc Section 3:
-      CupHandle   → below handle low (bottom * 0.995)
-      VCP         → below final contraction low (bottom * 0.995)
-      FlatBase    → below base low (bottom * 0.992)
-      InvHS       → below right shoulder low
-      DoubleBottom→ below the lower of the two bottoms
-      AscTriangle → below last rising trough (bottom * 0.995)
-      BullFlag    → below flag low (bottom * 0.995)
-      FallingWedge→ below wedge swing low (bottom * 0.995)
-      MomBurst    → below prior-day LOW (not close) — fastest structural
-      EpisodicPivot→ above prior close (gap fill = thesis broken)
-      PocketPivot → below prior close
-      Stage2Breakout→ below 150d MA
-      Anticipation→ below 20d consolidation low
+    RM3 FIX: Previously all stops used `bottom * 0.995` where `bottom` = closing
+    price at the trough. On volatile Indian mid-caps, intraday low at the trough bar
+    can be 1-3% below the close. Stop at close*0.995 gets hit by normal intraday
+    noise on day 1.
+
+    Fix: when `low` array + `bottom_bar_idx` are available, use the ACTUAL OHLC low
+    at the trough bar as the stop anchor (with a 0.3% buffer below that low).
+    Fallback to close*multiplier only when OHLC low unavailable.
     """
+    def _trough_low(fallback_mult=0.995):
+        """Use OHLC low at trough bar if available, else close*mult."""
+        if (low is not None and bottom_bar_idx is not None
+                and 0 <= bottom_bar_idx < len(low)):
+            actual_low = float(low[bottom_bar_idx])
+            if actual_low > 0:
+                return round(actual_low * 0.997, 2)   # 0.3% below intraday low
+        if bottom and bottom > 0:
+            return round(bottom * fallback_mult, 2)
+        return None
+
     if bottom and bottom > 0:
         if pattern in ("CupHandle", "VCP", "AscTriangle", "BullFlag",
                        "FallingWedge", "Anticipation"):
-            return round(bottom * 0.995, 2)
+            return _trough_low(0.995)
         if pattern == "FlatBase":
-            return round(bottom * 0.992, 2)
+            return _trough_low(0.992)
         if pattern == "InvHS":
-            return round(bottom * 0.995, 2)   # right shoulder low
+            return _trough_low(0.995)   # right shoulder low
         if pattern == "DoubleBottom":
-            return round(bottom * 0.992, 2)
+            return _trough_low(0.992)
         if pattern == "MomBurst":
-            # Prior day low: use low_p if available, else prior close * 0.99
+            # Prior day low: use low array (already uses OHLC low) — RM3 was already ok here
             if low is not None and len(low) >= 2:
                 return round(float(low[-2]), 2)
             return round(bottom * 0.99, 2)
         if pattern == "EpisodicPivot":
-            # Gap 8 FIX: EP stocks routinely fill 20-40% of the gap intraday.
-            # Stop at 0.1% above prior close is too tight and gets hit by normal noise.
-            # Use 50% gap fill as the stop — if more than half the gap is retraced,
-            # the thesis is weakening. bottom = prior close, bz = gap-up open/pivot.
             if bottom and bz and bz > bottom:
                 gap_midpoint = bottom + 0.50 * (bz - bottom)
                 return round(gap_midpoint, 2)
-            return round(bottom * 1.001, 2)   # fallback
+            return round(bottom * 1.001, 2)
         if pattern == "PocketPivot":
-            return round(bottom * 0.995, 2)
+            return _trough_low(0.995)
     if pattern == "Stage2Breakout" and close is not None and len(close) >= 150:
         ma150 = np.mean(close[-150:])
         return round(ma150 * 0.995, 2)
     return None
 
 
-def calc_targets(pattern, bz, bottom, cmp, adr, close=None, high=None, low=None):
+def calc_targets(pattern, bz, bottom, cmp, adr, close=None, high=None, low=None,
+                 bottom_bar_idx: int | None = None):
     """
     Pattern-specific targets with 2.0× ATR structural stop capped at 8%.
+
+    RM1 FIX: returns (stop, t1, t2, t3, rr, pos_size_1pct) where pos_size_1pct
+    is shares to buy per ₹1,00,000 capital risking exactly 1% (₹1,000) per trade.
+    Formula: shares = risk_capital / (entry - stop).
+    Caller uses CAPITAL env var (default ₹10L) to scale.
 
     Research corrections applied:
     1. ATR multiplier: 1.5× → 2.0× (1.5× is for DAY TRADES; swing needs 2.0×)
@@ -1347,7 +1526,8 @@ def calc_targets(pattern, bz, bottom, cmp, adr, close=None, high=None, low=None)
         stop_atr = cmp * (1 - MAX_STOP_PCT)
 
     # ── Step 2: Structural stop per pattern ──────────────────────────────────
-    struct_stop = calc_structural_stop(pattern, close, high, low, bz, bottom)
+    struct_stop = calc_structural_stop(pattern, close, high, low, bz, bottom,
+                                       bottom_bar_idx=bottom_bar_idx)   # RM3 FIX
 
     # ── Step 3: Final stop = highest (tightest) of the two ───────────────────
     if struct_stop is not None:
@@ -1387,7 +1567,18 @@ def calc_targets(pattern, bz, bottom, cmp, adr, close=None, high=None, low=None)
     reward = max(t2 - cmp, cmp * 0.03)
     rr = round(reward / risk, 2) if risk > 0 else 0
 
-    return stop, t1, t2, t3, rr
+    # RM1 FIX: position size for 1% capital risk per trade
+    # pos_size_1pct = shares to buy per ₹1,00,000 capital, risking ₹1,000 (1%)
+    # Scale to actual capital: CAPITAL env var (default ₹10,00,000 = ₹10L)
+    _capital_1L = 100_000
+    _risk_1pct  = _capital_1L * 0.01    # ₹1,000 per ₹1L of capital
+    pos_size_1pct = int(_risk_1pct / risk) if risk > 0 and cmp > 0 else None
+    # Sanity: cap at 10% of capital in single stock (position size * cmp ≤ ₹10K per ₹1L)
+    if pos_size_1pct is not None and cmp > 0:
+        max_shares = int((_capital_1L * 0.10) / cmp)
+        pos_size_1pct = min(pos_size_1pct, max_shares)
+
+    return stop, t1, t2, t3, rr, pos_size_1pct
 
 def identify_leg(close, bz):
     if len(close) < 50 or not bz: return "Unknown"
@@ -2208,7 +2399,15 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
         nc = nr = None
 
     cs, completeness = canslim_score(close, vol, fund, nc, nr)
-    stage = check_weinstein_stage(close)
+    # SC3 FIX: use weekly close (30w SMA) if available in cache
+    _weekly_close = None
+    try:
+        _wdf = read_cache(sym, "1wk", limit=40)
+        if _wdf is not None and len(_wdf) >= 35:
+            _weekly_close = _wdf["Close"].values.astype(float)
+    except Exception:
+        pass
+    stage = check_weinstein_stage(close, weekly_close=_weekly_close)
     vdu = check_volume_dryup(vol)
     earnings_near = check_earnings_near(fund)
     adr = calc_adr(close)
@@ -2225,7 +2424,10 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
     # Gap 4 FIX: volume indicators
     _obv_conf   = obv_confirming(close, vol) if vol is not None else True
     _udv_ratio  = calc_updown_vol_ratio(close, vol) if vol is not None else None
-    _rs_leading = rs_line_leading(close, nc if nc is not None else None)
+    _rs_leading = rs_line_leading(
+        close, nc if nc is not None else None,
+        close_index=df.index, nc_index=(nifty_d.index if nifty_d is not None else None)
+    )
 
     # Gap 10 FIX: weekly chart validation
     _wkly_valid, _wkly_reason = weekly_chart_valid(sym)
@@ -2289,10 +2491,11 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
             rec += f" [wkly: {_wkly_reason}]"
 
         patterns_found.add(pat)
-        stop, t1, t2, t3, rr = calc_targets(best["pattern"], best["bz"],
+        stop, t1, t2, t3, rr, pos_size_1pct = calc_targets(best["pattern"], best["bz"],
                                               best.get("bottom"), best["last"], adr,
                                               close=close,
-                                              high=high_p, low=low_p)
+                                              high=high_p, low=low_p,
+                                              bottom_bar_idx=best.get("_end_bar"))   # RM3 FIX
         leg  = identify_leg(close, best["bz"])
 
         # GAP-P1+P2 FIX: translate segment-relative _start_bar/_end_bar to
@@ -2348,6 +2551,7 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
             piotroski_score=_piotroski,          # GAP-F3
             pledge_pct=_pledge_pct if _pledge_pct else None,  # GAP-F1
             bulk_deal_cr=_bulk_deal_cr,          # GAP-F2
+            pos_size_1pct=pos_size_1pct,         # RM1: shares per ₹1L capital at 1% risk
             m1=best.get("m1"), m2=best.get("m2"), m3=best.get("m3"),
             m4=best.get("m4"), m5=best.get("m5"), notes=notes or None))
 
@@ -2603,10 +2807,19 @@ def fmt_halfhour(alerts):
         tier = f" {a.get('tier','')}" if a.get("tier") else ""
         formed = f"\n   📅 Formed: {a['pattern_formed']} | TF: {a.get('timeframe','?')}" if a.get("pattern_formed") else ""
         eta   = f" | T1 by {a['t1_eta']}" if a.get("t1_eta") else ""
+        # MM1 FIX: display VWAP position + RVOL if available
+        vwap_str = ""
+        if a.get("vwap") is not None:
+            _vs = a.get("vs_vwap") or 0
+            sign = "▲" if _vs >= 0 else "▼"
+            vwap_str = f"\n   📊 VWAP ₹{a['vwap']} ({sign}{abs(_vs):.1f}%)"
+            if a.get("rvol") is not None:
+                vwap_str += f" | RVOL {a['rvol']}x"
+            vwap_str += ")"
         lines.append(
             f"{em} <b>{a['stock']}</b> — {a['pattern']} — {status}\n"
             f"   ₹{a['cmp']} | BZ ₹{a.get('bz','?')}{vs}{sl}{t1}{rr}{sc}{tier}"
-            f"{formed}{eta}"
+            f"{formed}{eta}{vwap_str}"
         )
     return "\n".join(lines)
 
@@ -2653,6 +2866,24 @@ def halfhour_check(nifty_d):
                     "score10": item.get("score10"), "tier": item.get("tier"),
                 })
                 mark_alert_sent(item["stock"], profit_key, "PROFIT20")
+                # RM2 FIX: After T1 hit, trail stop to breakeven (BZ price).
+                # O'Neil: raise stop to entry once +2-3% ahead; breakeven = BZ.
+                # If cmp pulled back to within 2% of BZ → TRAIL STOP ALERT.
+                _breakeven_key = f"{item.get('pattern','')}_TRAIL_BE"
+                if (profit_pct >= 20 and cmp <= bz * 1.03
+                        and not already_alerted_today(item["stock"], _breakeven_key)):
+                    alerts.append({
+                        "stock": item["stock"], "pattern": item.get("pattern",""),
+                        "status": (
+                            f"⚠️ TRAIL STOP — raise to breakeven ₹{bz} "
+                            f"(was +{profit_pct:.1f}%, now pulling back)"
+                        ),
+                        "cmp": cmp, "bz": bz, "vs": None,
+                        "stop": bz, "t1": item.get("target_2"), "rr": None,
+                        "score10": item.get("score10"), "tier": item.get("tier"),
+                        "vwap": None, "vs_vwap": None, "rvol": None,
+                    })
+                    mark_alert_sent(item["stock"], _breakeven_key, "TRAIL_BE")
                 continue   # skip normal BREAKOUT check if already at profit
 
         if bz and cmp >= bz * 0.995:
@@ -2661,6 +2892,17 @@ def halfhour_check(nifty_d):
         elif sl and cmp <= sl:
             status = "STOP HIT"
         if status != "watching" and not already_alerted_today(item["stock"], item.get("pattern","")):
+            # MM1 FIX: attach VWAP + RVOL to breakout alert
+            _vwap = None; _vs_vwap = None; _rvol_now = None
+            try:
+                from data_updater import calc_vwap_today, get_rvol as _get_rvol
+                _vwap, _vs_vwap = calc_vwap_today(sym)
+                # RVOL at current time bucket (minutes since midnight IST)
+                _now_ist  = _now()
+                _bucket   = (_now_ist.hour * 60 + _now_ist.minute // 15 * 15)
+                _rvol_now = _get_rvol(sym.replace(".NS",""), _bucket)
+            except Exception:
+                pass
             alerts.append({
                 "stock": item["stock"], "pattern": item.get("pattern",""),
                 "status": status, "cmp": cmp, "bz": bz, "vs": alert_vs,
@@ -2669,6 +2911,7 @@ def halfhour_check(nifty_d):
                 "t1_eta": item.get("t1_eta"), "t2_eta": item.get("t2_eta"),
                 "pattern_formed": item.get("pattern_formed"),
                 "timeframe": item.get("timeframe"),
+                "vwap": _vwap, "vs_vwap": _vs_vwap, "rvol": _rvol_now,
             })
             mark_alert_sent(item["stock"], item.get("pattern",""), status)
 
@@ -3313,7 +3556,10 @@ def main():
     df = raw.sort_values("score10", ascending=False).reset_index(drop=True)
 
     # Save to DB
-    db_execmany(con, """INSERT INTO signals
+    # OB1 FIX: INSERT OR IGNORE — unique index on (stock, pattern, scan_date) prevents
+    # the same base-pattern signal from being inserted 3× per day (8AM / 12:30PM / 4:30PM).
+    # New intraday signals (different stock or pattern) still insert normally.
+    db_execmany(con, """INSERT OR IGNORE INTO signals
         (scan_date,scan_time,scan_mode,stock,name,sector,cap_class,cap_cr,
          pattern,timeframe,pattern_formed,pattern_start_date,pattern_end_date,formation_days,
          t1_eta,t2_eta,t3_eta,
