@@ -409,6 +409,29 @@ def load_universe():
 _YF_SESSION = None
 _YF_SESSION_LOCK = Lock()
 
+# ================================================================
+# GLOBAL RATE-LIMIT CIRCUIT BREAKER
+# ================================================================
+# Shared across all worker threads. When any thread hits a 429,
+# it sets _RL_UNTIL so ALL threads pause before their next request.
+
+_RL_LOCK  = Lock()
+_RL_UNTIL = 0.0   # epoch seconds; 0 = no limit active
+
+def _set_rate_limit(seconds: int):
+    global _RL_UNTIL
+    with _RL_LOCK:
+        new_until = time.time() + seconds
+        if new_until > _RL_UNTIL:
+            _RL_UNTIL = new_until
+            log.warning(f"Rate limit — ALL workers paused for {seconds}s "
+                        f"(until {time.strftime('%H:%M:%S', time.localtime(new_until))})")
+
+def _wait_if_rate_limited(caller: str = ""):
+    remaining = _RL_UNTIL - time.time()
+    if remaining > 0:
+        log.info(f"  [{caller}] rate-limit gate — waiting {remaining:.0f}s")
+        time.sleep(remaining + 0.5)
 
 # ================================================================
 # PRICE CACHE — incremental OHLCV store
@@ -823,6 +846,9 @@ def _normalize_df_index(df: pd.DataFrame) -> pd.DataFrame:
 
 def dl(sym, interval="1d", period=PERIOD_DAILY):
     for attempt in range(DL_RETRIES):
+        # Block here until the global rate-limit window clears.
+        # All parallel workers pause here — no flood while banned.
+        _wait_if_rate_limited(sym)
         try:
             sess = _get_session()
             kw = {"session": sess} if sess is not None else {}
@@ -846,9 +872,10 @@ def dl(sym, interval="1d", period=PERIOD_DAILY):
                 log.warning(f"401/Crumb on {sym} attempt {attempt+1} — reset session")
                 _reset_session(); time.sleep(8)
             elif "429" in msg or "rate limit" in msg.lower() or "too many" in msg.lower():
-                wait = 15 * (attempt + 1)   # 15s → 30s → 45s
-                log.warning(f"RateLimit {sym} — wait {wait}s")
-                time.sleep(wait)
+                # Escalating global pause: 60s → 120s → 180s
+                backoff = 60 * (attempt + 1)
+                _set_rate_limit(backoff)
+                _wait_if_rate_limited(sym)
             elif "delisted" in msg.lower() or "no price data" in msg.lower():
                 return None   # no retry on delisted
             elif attempt < DL_RETRIES - 1:
