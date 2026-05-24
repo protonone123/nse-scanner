@@ -338,7 +338,10 @@ def get_db():
         ("piotroski_score",    "INTEGER"),
         ("pledge_pct",         "REAL"),
         ("bulk_deal_cr",       "REAL"),
-        ("pos_size_1pct",      "INTEGER"),   # RM1: shares per ₹1L capital at 1% risk
+        ("pos_size_1pct",      "INTEGER"),   # RM1
+        ("delivery_pct",       "REAL"),      # DS3: Bhavcopy delivery %
+        ("is_gsm",             "INTEGER"),   # MM3: 1 = GSM surveillance
+        ("sector_stage",       "TEXT"),      # SC5: sector trend
     ]
     _seen = set()
     for col, typ in _new_cols:
@@ -2130,6 +2133,85 @@ def det_stage2bo(c, v):
                 m1=round((c[-1]/ma150-1)*100,2), m2=None, m3=None, m4=None, m5=None,
                 _start_bar=stage2_start, _end_bar=n-1)
 
+def det_darvas(c, v, h=None):
+    """
+    Darvas Box — PD6.
+
+    Nicholas Darvas (1960): stock makes new 52-week high, then consolidates
+    in a tight box. Breakout from box top on volume = institutional accumulation.
+
+    Criteria:
+      1. New 52-week high made within last 15 bars
+      2. Price consolidates in box: top = that high bar's close, bottom = lowest close after
+      3. Box depth ≤ 20% (ideal < 12%)
+      4. ≥ 5 bars inside box, no close below floor
+      5. Volume contracting inside box (dry-up)
+      6. Current close within 3% of box top (near breakout zone)
+    """
+    n = len(c)
+    if n < 60 or v is None or len(v) < 60:
+        return None
+
+    lookback     = min(252, n - 15)
+    hist_window  = c[-lookback - 15:-15] if lookback > 0 else c[:max(1, n - 15)]
+    peak_52wk    = float(np.max(hist_window)) if len(hist_window) > 0 else 0.0
+
+    new_high_bar = None
+    for i in range(1, min(16, n)):
+        if c[-(i + 1)] >= peak_52wk * 0.998:
+            new_high_bar = n - (i + 1)
+            break
+
+    if new_high_bar is None:
+        return None
+
+    bars_since = n - 1 - new_high_bar
+    if bars_since < 5:
+        return None
+
+    box_seg    = c[new_high_bar:]
+    box_top    = float(c[new_high_bar])
+    box_bottom = float(np.min(box_seg[1:])) if len(box_seg) > 1 else box_top
+    if box_bottom <= 0 or box_top <= 0:
+        return None
+
+    box_depth = (box_top - box_bottom) / box_top
+    if box_depth > 0.20:
+        return None
+
+    for price in box_seg[1:]:
+        if price < box_bottom * 0.985:
+            return None
+        if price > box_top * 1.03:
+            return None   # already broke out
+
+    vol_in_box = v[new_high_bar + 1:]
+    vol_before = v[max(0, new_high_bar - 20):new_high_bar]
+    vol_dryup  = (len(vol_in_box) >= 3 and len(vol_before) >= 5 and
+                  float(np.mean(vol_in_box)) < float(np.mean(vol_before)) * 0.85)
+
+    dist_to_bz = (box_top - c[-1]) / box_top
+    if dist_to_bz > 0.03 or c[-1] > box_top * 1.01:
+        return None
+
+    quality = round((1 - box_depth / 0.20) * (0.9 if vol_dryup else 0.65), 3)
+    vs      = vsurge(v, n)
+
+    return dict(
+        pattern="DarvasBox", status="Box Forming",
+        quality=quality, bz=round(box_top, 2),
+        bottom=round(box_bottom, 2), last=round(float(c[-1]), 2), vs=vs,
+        m1=round(box_depth * 100, 2),     # box depth %
+        m2=bars_since,                     # bars in box
+        m3=round(dist_to_bz * 100, 2),    # % below breakout
+        m4=1 if vol_dryup else 0,
+        m5=None,
+        _start_bar=new_high_bar, _end_bar=n - 1,
+        vol_dryup=vol_dryup,
+    )
+
+
+
 # ================================================================
 # PATTERN FORMATION METADATA + TARGET ETA
 # ================================================================
@@ -2151,6 +2233,7 @@ _PATTERN_ETA = {
     "PocketPivot":    (8,  20, 40),   # 5-10d T1, 15-25d T2
     "Anticipation":   (8,  20, 35),   # 1-3w T1, 3-6w T2
     "Stage2Breakout": (20, 60, 120),  # 3-6w T1, 8-20w T2
+    "DarvasBox":      (10, 25, 55),   # PD6: Darvas — 2w T1, 4-6w T2
 }
 
 # ── GAP-D3 FIX: NSE Holiday Calendar 2025-2026 ──────────────────────────────
@@ -2349,6 +2432,7 @@ DETECTORS = {
     "PocketPivot":   (det_ppivot,       [30]),
     "Anticipation":  (det_anticipation, [30,50]),
     "Stage2Breakout":(det_stage2bo,     [180]),
+    "DarvasBox":     (det_darvas,        [60,80,120,180,252]),   # PD6: Darvas Box
 }
 
 # ================================================================
@@ -2359,7 +2443,7 @@ DETECTORS = {
 # ================================================================
 def scan_stock(sym, nifty_d, ftd_active, market_trend,
                period=PERIOD_DAILY, detector_filter=None, aggression=2,
-               bulk_deals_today=None):
+               bulk_deals_today=None, market_ctx=None):
     """
     bulk_deals_today: dict from fundamentals.get_bulk_deals_today(), passed in
     from main() so we call the API only once per scan, not once per stock.
@@ -2459,7 +2543,33 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
     # ── GAP-F3: Piotroski score ───────────────────────────────────────────────
     _piotroski = fund.get("piotroski_score")  # computed by fundamentals.py
 
-    dets = {k:v for k,v in DETECTORS.items()
+    # ── DS3: Delivery % from Bhavcopy ────────────────────────────────────────
+    # High delivery % (>60%) = institutional delivery accumulation (not intraday speculative).
+    # Used in score10 component and signal notes.
+    _deliv_pct = None
+    if market_ctx and market_ctx.get("bhavcopy"):
+        sym_clean_bh = sym.upper().replace(".NS", "").replace(".BO", "").strip()
+        bh_entry = market_ctx["bhavcopy"].get(sym_clean_bh)
+        if bh_entry:
+            _deliv_pct = bh_entry.get("deliv_pct")
+
+    # ── MM3: GSM surveillance filter ─────────────────────────────────────────
+    # GSM stocks have trading restrictions — flag but still score (user may hold already).
+    _is_gsm = False
+    if market_ctx and market_ctx.get("gsm_stocks"):
+        sym_clean_gsm = sym.upper().replace(".NS", "").replace(".BO", "").strip()
+        _is_gsm = sym_clean_gsm in market_ctx["gsm_stocks"]
+
+    # ── SC5: Sector trend ─────────────────────────────────────────────────────
+    # O'Neil 'L': leader in a leading sector. Use cached sector index trend.
+    _sector_stage = "Unknown"
+    try:
+        from market_data import get_sector_trend_for_stock
+        _sector_stage = get_sector_trend_for_stock(fund.get("sector") or "")
+    except Exception:
+        pass
+
+    dets = {k: v for k, v in DETECTORS.items()
             if detector_filter is None or k in detector_filter}
 
     for pat, (detector, windows) in dets.items():
@@ -2551,7 +2661,10 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
             piotroski_score=_piotroski,          # GAP-F3
             pledge_pct=_pledge_pct if _pledge_pct else None,  # GAP-F1
             bulk_deal_cr=_bulk_deal_cr,          # GAP-F2
-            pos_size_1pct=pos_size_1pct,         # RM1: shares per ₹1L capital at 1% risk
+            pos_size_1pct=pos_size_1pct,         # RM1
+            delivery_pct=_deliv_pct,             # DS3: Bhavcopy delivery %
+            is_gsm=1 if _is_gsm else 0,          # MM3: surveillance flag
+            sector_stage=_sector_stage,          # SC5: sector trend
             m1=best.get("m1"), m2=best.get("m2"), m3=best.get("m3"),
             m4=best.get("m4"), m5=best.get("m5"), notes=notes or None))
 
@@ -2728,15 +2841,33 @@ def _save_csvs(buys: pd.DataFrame, watches: pd.DataFrame,
     log.info(f"CSV WATCH ({len(watches):>4} rows) → {os.path.basename(watch_path)}")
     return buy_path, watch_path
 
-def fmt_daily(df, market_trend, ftd, regime_info=None):
+def fmt_daily(df, market_trend, ftd, regime_info=None, fii_dii_ctx=None):
     _ist_hm = _ist("%H:%M")
     buys  = df[df["tier"].str.contains("BUY", na=False)]
     watch = df[df["tier"].str.contains("WATCH", na=False)]
     ftd_str = "YES ✅" if ftd else "NO"
+
+    # OB2 FIX: FII/DII flow + sector rotation briefing at top of daily message.
+    # This is the first thing an institution-aware trader checks before individual signals.
+    fii_str = ""
+    if fii_dii_ctx:
+        fn  = fii_dii_ctx.get("fii_net_cr")
+        dn  = fii_dii_ctx.get("dii_net_cr")
+        sent = fii_dii_ctx.get("fii_dii_sentiment", "")
+        if fn is not None:
+            fn_sign = "+" if fn >= 0 else ""
+            dn_sign = "+" if (dn or 0) >= 0 else ""
+            sent_em = {"BULLISH":"🟢","MILDLY_BULLISH":"🟡","NEUTRAL":"⚪",
+                       "MIXED":"🟡","BEARISH":"🔴"}.get(sent, "⚪")
+            fii_str = (
+                f"{sent_em} FII: {fn_sign}₹{fn:.0f}Cr | "
+                f"DII: {dn_sign}₹{dn:.0f}Cr — {sent}\n"
+            )
+
     lines = [
         f"<b>📊 NSE Scanner — {_today()} {_ist_hm}</b>",
         f"Market: {market_trend} | FTD: {ftd_str} | Regime: {regime_info['regime'] if regime_info else '?'}",
-        f"BUY STRONG: {len(df[df['tier'].str.contains('STRONG',na=False)])} | "
+        fii_str + f"BUY STRONG: {len(df[df['tier'].str.contains('STRONG',na=False)])} | "
         f"BUY MOD: {len(df[df['tier'].str.contains('MODERATE',na=False)])} | "
         f"WATCH: {len(watch)}\n",
     ]
@@ -2761,6 +2892,12 @@ def fmt_daily(df, market_trend, ftd, regime_info=None):
         # GAP-F1/F2/F3 supplementary info
         pio_str  = f" Pio:{r['piotroski_score']}/9" if r.get("piotroski_score") is not None else ""
         deal_str = f" 💼₹{r['bulk_deal_cr']:.0f}Cr" if r.get("bulk_deal_cr") else ""
+        # SC5/DS3/MM3/RM1 supplementary signal info
+        sec_stage  = r.get("sector_stage", "")
+        sec_str    = f" | Sector:{sec_stage}" if sec_stage and sec_stage not in ("Unknown","") else ""
+        deliv_str  = f" | Deliv:{r['delivery_pct']:.0f}%" if r.get("delivery_pct") is not None else ""
+        gsm_str    = " | ⚠️GSM" if r.get("is_gsm") else ""
+        pos_str    = f" | Size:{r['pos_size_1pct']}sh/₹1L" if r.get("pos_size_1pct") else ""
         lines.append(
             f"{em} <b>{r['stock']}</b> ({r.get('cap_class','?')}) — {r['pattern']}{conv}\n"
             f"   Score: <b>{score}/10</b>  {tier}\n"
@@ -2770,7 +2907,8 @@ def fmt_daily(df, market_trend, ftd, regime_info=None):
             f"T2 ₹{r.get('target_2','?')} by {t2_eta} | "
             f"T3 ₹{r.get('target_3','?')} by {t3_eta}\n"
             f"   RR {r.get('risk_reward','?')}x | CANSLIM {r['canslim_score']}/{r.get('data_completeness','?')} | "
-            f"RS {r.get('rs_percentile','?')}pct | {r.get('stage','?')}{pio_str}{deal_str}{notes}"
+            f"RS {r.get('rs_percentile','?')}pct | {r.get('stage','?')}"
+            f"{pio_str}{deal_str}{sec_str}{deliv_str}{gsm_str}{pos_str}{notes}"
         )
     return "\n".join(lines)
 
@@ -3356,8 +3494,6 @@ def main():
         log.info(f"Market: {market_trend} | FTD: {ftd_active} ({ftd_note})")
 
     # GAP-F2 FIX: Fetch bulk/block deals ONCE before the scan loop — O(1) not O(n).
-    # Previously: get_bulk_deals_today() was not called at all (wired but unused).
-    # Now: passed to every scan_stock() call so bulk deal notes appear in signals.
     bulk_deals_today = {}
     try:
         from fundamentals import get_bulk_deals_today
@@ -3367,12 +3503,29 @@ def main():
     except Exception as _bd_ex:
         log.debug(f"Bulk deals fetch failed (non-critical): {_bd_ex}")
 
+    # DS3+DS4+MM3 FIX: Fetch Bhavcopy, FII/DII, GSM once before scan loop.
+    # market_ctx passed to every scan_stock call — no per-stock API calls.
+    market_ctx = {}
+    try:
+        from market_data import get_market_context
+        market_ctx = get_market_context()
+        log.info(
+            f"Market context: FII ₹{market_ctx.get('fii_net_cr','?')}Cr | "
+            f"DII ₹{market_ctx.get('dii_net_cr','?')}Cr | "
+            f"Sentiment: {market_ctx.get('fii_dii_sentiment','?')} | "
+            f"Bhavcopy: {len(market_ctx.get('bhavcopy',{}))} | "
+            f"GSM: {len(market_ctx.get('gsm_stocks',set()))}"
+        )
+    except Exception as _mc_ex:
+        log.debug(f"Market context fetch failed (non-critical): {_mc_ex}")
+
     all_rows = []; ok_count = 0; fund_fails = 0
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futs = {ex.submit(scan_stock, s, nifty_d, ftd_active, market_trend,
                                    aggression=aggression,
-                                   bulk_deals_today=bulk_deals_today): s for s in stocks}
+                                   bulk_deals_today=bulk_deals_today,
+                                   market_ctx=market_ctx): s for s in stocks}
         for i, fut in enumerate(as_completed(futs)):
             if (i+1) % 200 == 0:
                 log.info(f"  {i+1}/{len(stocks)} | signals: {len(all_rows)}")
@@ -3542,6 +3695,29 @@ def main():
             except Exception:
                 pass
 
+        # ── 16. Sector trend leadership (0.4 pt, -0.2 penalty) — SC5 ──────
+        # O'Neil 'L': leaders come from leading sectors.
+        # sector_stage populated by market_data.get_sector_trend_for_stock()
+        sec_stage = str(r.get("sector_stage") or "Unknown")
+        if sec_stage == "Stage2":   score += 0.4   # leading sector — strong confirmation
+        elif sec_stage == "Uptrend": score += 0.2   # uptrend but not Stage2
+        elif sec_stage == "Stage4": score -= 0.2    # declining sector — avoid breakouts
+
+        # ── 17. Delivery % — institutional confirmation (0.4 pt) — DS3 ────
+        # Bhavcopy delivery % > 60% = institutions routing delivery trades.
+        # Breakout on high delivery = real accumulation. Low delivery = speculative.
+        dp = r.get("delivery_pct")
+        if dp is not None:
+            if dp >= 70:   score += 0.4   # very high delivery = strong institutional buy
+            elif dp >= 55: score += 0.25  # above average delivery
+            elif dp < 20:  score -= 0.2   # very low = speculative volume only
+
+        # ── 18. GSM surveillance penalty — MM3 ─────────────────────────────
+        # GSM stocks have trading restrictions. Institutional signals on them are
+        # unreliable or unexecutable. Hard penalty — rarely recovers to BUY tier.
+        if r.get("is_gsm"):
+            score -= 2.0
+
         return round(min(score, 10.0), 2)
 
     def _tier(score10: float) -> str:
@@ -3640,7 +3816,8 @@ def main():
 
     if args.telegram:
         _cap_time = _ist("%H:%M")
-        send_telegram(fmt_daily(df, market_trend, ftd_active, regime_info=regime_info))
+        send_telegram(fmt_daily(df, market_trend, ftd_active, regime_info=regime_info,
+                                fii_dii_ctx=market_ctx if market_ctx else None))
         # Send BUY csv (primary — Telegram delivers first)
         buy_cap = (f"📈 NSE {scan_label} {_today()} {_cap_time} | "
                    f"BUY: {len(buys)} | Market: {market_trend}")
