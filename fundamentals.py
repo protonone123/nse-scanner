@@ -43,9 +43,10 @@ BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 CACHE_PATH = os.path.join(BASE_DIR, "price_cache.db")
 
 # ── TTLs ──────────────────────────────────────────────────────────────────────
-TTL_BULK    = 0   # same-day only — fetched once per scan run
-TTL_PIO     = 7   # days — quarterly financials
-TTL_PLEDGE  = 7   # days — quarterly shareholding pattern
+TTL_BULK      = 0   # same-day only — fetched once per scan run
+TTL_PIO       = 7   # days — quarterly financials
+TTL_PLEDGE    = 7   # days — quarterly shareholding pattern
+TTL_NOT_FOUND = 30  # days — symbol confirmed missing on Yahoo; don't retry for a month
 
 # ── Cache DB (shared with scanner/data_updater) ───────────────────────────────
 _db_lock = Lock()
@@ -98,8 +99,17 @@ def _cache_read_ext(stock: str, data_key: str, ttl_days: int) -> dict | None:
         if ttl_days > 0:
             try:
                 updated = date.fromisoformat(row[1])
-                if (date.today() - updated).days > ttl_days:
+                cached_data = json.loads(row[0])
+                # "not_found" symbols use TTL_NOT_FOUND instead of normal TTL —
+                # no point retrying weekly, Yahoo Finance will still 404 them.
+                effective_ttl = (
+                    TTL_NOT_FOUND
+                    if isinstance(cached_data, dict) and cached_data.get("reason") == "not_found"
+                    else ttl_days
+                )
+                if (date.today() - updated).days > effective_ttl:
                     return None  # stale
+                return cached_data
             except Exception:
                 return None
         return json.loads(row[0])
@@ -343,11 +353,21 @@ def get_piotroski_score(sym: str) -> int | None:
     score = None
     try:
         import yfinance as yf
+        import logging as _logging
         tk = yf.Ticker(sym)
 
-        income   = tk.financials      # rows = line items, cols = years
-        balance  = tk.balance_sheet
-        cashflow = tk.cashflow
+        # Suppress yfinance's own ERROR-level logs (e.g. "HTTP Error 404: Quote not found").
+        # The exception still propagates to our handler — we just don't want
+        # yfinance polluting the run log with red ERROR lines for expected 404s.
+        _yf_log = _logging.getLogger("yfinance")
+        _old_yf_level = _yf_log.level
+        _yf_log.setLevel(_logging.CRITICAL)
+        try:
+            income   = tk.financials      # rows = line items, cols = years
+            balance  = tk.balance_sheet
+            cashflow = tk.cashflow
+        finally:
+            _yf_log.setLevel(_old_yf_level)
 
         if (income is None or income.empty or
             balance is None or balance.empty or
@@ -451,8 +471,18 @@ def get_piotroski_score(sym: str) -> int | None:
         score = pts
         log.debug(f"Piotroski {sym}: {score}/9")
     except Exception as e:
-        log.debug(f"Piotroski {sym} error: {e}")
-        score = None
+        err_str = str(e)
+        is_not_found = (
+            "Not Found" in err_str or "404" in err_str or
+            "Quote not found" in err_str or "no price data" in err_str.lower()
+        )
+        if is_not_found:
+            log.info(f"Piotroski {sym}: symbol not on Yahoo Finance — skipping for {TTL_NOT_FOUND}d")
+            _cache_write_ext(sym, "piotroski", {"score": None, "reason": "not_found"})
+        else:
+            log.debug(f"Piotroski {sym} error: {e}")
+            _cache_write_ext(sym, "piotroski", {"score": None, "reason": "exception"})
+        return None
 
     _cache_write_ext(sym, "piotroski", {"score": score})
     return score
