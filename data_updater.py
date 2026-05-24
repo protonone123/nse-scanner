@@ -570,6 +570,44 @@ def write_fund(stock: str, fund: dict):
         pass
 
 # ================================================================
+# FUNDAMENTALS WEEKLY GUARD
+# fund_cache uses a weekly GitHub Actions cache key, so the DB persists
+# across daily runs within the same week. We store a __meta__ marker row
+# to skip the 2144-stock prefetch on subsequent days of the same week.
+# ================================================================
+FUND_INTERVAL_DAYS = 7  # re-run fundamentals at most once every N days
+
+def _fundamentals_last_run() -> "date | None":
+    """Return the date fundamentals were last pre-fetched (from DB meta row)."""
+    try:
+        con = _get_db()
+        row = con.execute(
+            "SELECT updated_date FROM fund_cache WHERE stock='__meta__'"
+        ).fetchone()
+        if row and row[0]:
+            from datetime import date as _date
+            return _date.fromisoformat(row[0])
+    except Exception:
+        pass
+    return None
+
+def _mark_fundamentals_ran():
+    """Record today as the date fundamentals were last successfully run."""
+    try:
+        con = _get_db()
+        with _db_lock:
+            marker_json = '{"type":"fundamentals_run_marker"}'
+            con.execute(
+                "INSERT OR REPLACE INTO fund_cache (stock,fund_json,updated_date) "
+                "VALUES ('__meta__', ?, ?)",
+                (marker_json, str(_today()))
+            )
+            con.commit()
+        log.info(f"Fundamentals marker updated — next run in {FUND_INTERVAL_DAYS}d")
+    except Exception as e:
+        log.debug(f"Mark fundamentals ran: {e}")
+
+# ================================================================
 # RESAMPLE — 30m / 45m / 75m from 15m base
 # ================================================================
 def resample_tf(df_15m: pd.DataFrame, tf: str) -> pd.DataFrame | None:
@@ -1109,6 +1147,8 @@ def main():
     mode.add_argument("--gap",        action="store_true", help="Gap scanner (9:20 AM)")
     mode.add_argument("--sectors",    action="store_true", help="Update sector indices")
     mode.add_argument("--stats",      action="store_true", help="Print cache statistics")
+    mode.add_argument("--fundamentals", action="store_true",
+                      help="Weekly fundamentals prefetch (run via dedicated weekly job)")
     ap.add_argument("--telegram",     action="store_true")
     args = ap.parse_args()
 
@@ -1151,26 +1191,23 @@ def main():
         run_eod_update(stocks)
         update_sectors()
 
-        # IR5 FIX: Pre-fetch fundamentals BEFORE scanner.py --daily runs.
-        # Old behaviour: disabled to avoid 401 rate-limiting.
-        # Root cause of 401s was NOT the pre-fetch itself but calling fundamentals
-        # on 2100+ stocks during the scan window via 4 workers simultaneously.
-        # Fix: single-threaded pre-fetch here at 1 req/sec (screener.in safe rate).
-        # Scanner then reads cache with <1ms overhead per stock — zero live calls.
-        #
-        # Only updates stocks NOT already cached within 7 days (TTL).
-        # Typical weekday: ~150-300 stocks need refresh (new listings + TTL expiry).
-        # At 1 req/sec + ~2s screener.in parse time → ~5-10 min for full refresh.
-        # Runs AFTER EOD price update so scan has both fresh OHLCV + fresh fundamentals.
+        # Fundamentals moved to dedicated weekly job (--fundamentals flag / weekly cron).
+        # This keeps --daily consistently under 30 min every weekday.
+        return
+
+    if args.fundamentals:
+        log.info(f"=== Weekly fundamentals prefetch {_ist()} ===")
+        stocks = load_universe()
         try:
             from fundamentals import prefetch_fundamentals
-            log.info("IR5: Pre-fetching fundamentals (Piotroski + pledge, 7-day TTL)...")
+            log.info(f"Running Piotroski + pledge prefetch for {len(stocks)} stocks ...")
             prefetch_fundamentals(stocks, workers=1, delay=1.2)
-            log.info("IR5: Fundamentals pre-fetch complete")
+            _mark_fundamentals_ran()
+            log.info("Fundamentals prefetch complete")
         except ImportError:
-            log.warning("fundamentals.py not found — skipping pre-fetch")
+            log.error("fundamentals.py not found")
         except Exception as e:
-            log.warning(f"IR5: Fundamentals pre-fetch error (non-critical): {e}")
+            log.error(f"Fundamentals prefetch failed: {e}")
         return
 
     if args.bootstrap:
