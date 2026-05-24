@@ -2,10 +2,6 @@ name: NSE Live Scanner v4.2
 
 on:
   schedule:
-    # ── WEEKLY FUNDAMENTALS ──────────────────────────────────────────────────────
-    # Original Sunday 6:00 PM IST = 12:30 UTC Sunday
-    - cron: "30 12 * * 0"
-
     # ── DAILY FULL SCANS ──────────────────────────────────────────────────────
     # Adjusted total 2h40m earlier to compensate GitHub Actions delay
 
@@ -355,14 +351,13 @@ jobs:
           retention-days: 7
 
   # ════════════════════════════════════════════════════════════════════
-  # WEEKLY FUNDAMENTALS — Piotroski + pledge for all 2144 stocks
-  # Runs Sunday 6 PM IST. Separate job so daily is never blocked/timed out.
+  # FUNDAMENTALS — manual only (run once a month / after results season)
+  # Piotroski + promoter/pledge for all stocks. ~60-90 min.
+  # Trigger: Actions → Run workflow → select "fundamentals"
   # ════════════════════════════════════════════════════════════════════
 
   fundamentals:
-    if: |
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'fundamentals') ||
-      github.event.schedule == '30 12 * * 0'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'fundamentals'
 
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -398,7 +393,7 @@ jobs:
           restore-keys: |
             price-cache-${{ runner.os }}-
 
-      - name: Run weekly fundamentals prefetch
+      - name: Run fundamentals prefetch
         run: python data_updater.py --fundamentals
 
       - name: Save price cache
@@ -414,7 +409,7 @@ jobs:
         with:
           name: fundamentals-${{ github.run_number }}
           path: logs/
-          retention-days: 14
+          retention-days: 30
           if-no-files-found: warn
 
   # ════════════════════════════════════════════════════════════════════
