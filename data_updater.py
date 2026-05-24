@@ -75,10 +75,7 @@ def _ist(fmt="%H:%M IST"): return _now().strftime(fmt)
 
 MAX_WORKERS   = 4      # was 5 — further reduced; semaphore is the real limiter now
 DL_RETRIES    = 6      # was 3 — more attempts with backoff
-DL_BACKOFF    = 3.0    # base backoff between non-rate-limit retries
-BATCH_SIZE    = 50     # stocks per yfinance batch call
-BATCH_DELAY   = 3.0    # seconds between batches (was 1.5 — doubled to ease rate limits)
-RETRY_COOLDOWN = 60    # seconds to wait before the failed-stocks retry pass
+DL_BACKOFF    = 2.0
 
 # ================================================================
 # YAHOO FINANCE RATE-LIMIT MANAGEMENT
@@ -195,39 +192,6 @@ def _reset_session():
     with _YF_SESSION_LOCK:
         _YF_SESSION = None
 
-# Prevent multiple threads from simultaneously rebuilding the session after a 401.
-# Only the first thread rebuilds; others wait for it to finish.
-_YF_CRUMB_REBUILD_LOCK = _threading.Lock()
-_YF_CRUMB_REBUILDING   = False
-
-def _force_session_refresh(wait_after: float = 8.0):
-    """
-    Serialize session rebuilds after 401/Invalid-Crumb errors.
-    The first thread to call this rebuilds eagerly; subsequent threads
-    see _YF_CRUMB_REBUILDING=True and just wait for the rebuild to finish.
-    """
-    global _YF_CRUMB_REBUILDING
-    acquired = _YF_CRUMB_REBUILD_LOCK.acquire(blocking=False)
-    if not acquired:
-        # Another thread is already rebuilding — just wait for it
-        log.debug("401 rebuild already in progress — waiting")
-        with _YF_CRUMB_REBUILD_LOCK:   # blocks until rebuilder releases
-            pass
-        time.sleep(_random.uniform(1.0, 3.0))
-        return
-    try:
-        _YF_CRUMB_REBUILDING = True
-        _reset_session()
-        log.warning(f"Session reset after 401 — waiting {wait_after:.0f}s before rebuild")
-        time.sleep(wait_after)
-        _get_session()    # eagerly warm up the new session
-        log.info("Session rebuilt successfully after 401")
-    except Exception as e:
-        log.warning(f"Session rebuild failed: {e}")
-    finally:
-        _YF_CRUMB_REBUILDING = False
-        _YF_CRUMB_REBUILD_LOCK.release()
-
 # ================================================================
 # DOWNLOAD
 # ================================================================
@@ -264,13 +228,14 @@ def dl(sym: str, interval: str = "1d", period: str = "1y") -> pd.DataFrame | Non
         except Exception as e:
             msg = str(e)
             if _is_rate_limit(e):
-                wait = _jittered_backoff(attempt, base=30.0, cap=240.0)
+                wait = _jittered_backoff(attempt, base=20.0, cap=180.0)
                 _yf_trigger_cooldown(wait)
                 log.warning(f"RateLimit dl {sym} attempt {attempt+1} — cooldown {wait:.0f}s")
                 time.sleep(wait)
             elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
-                log.warning(f"401 {sym} attempt {attempt+1} — forcing session rebuild")
-                _force_session_refresh(wait_after=8.0 * (attempt + 1))
+                log.warning(f"401 {sym} attempt {attempt+1} — reset session")
+                _reset_session()
+                time.sleep(_jittered_backoff(attempt, base=8.0))
             elif "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
                 log.debug(f"ISO timestamp {sym} attempt {attempt+1} — reset")
                 _reset_session()
@@ -302,13 +267,14 @@ def dl_since(sym: str, interval: str, since_date: str) -> pd.DataFrame | None:
         except Exception as e:
             msg = str(e)
             if _is_rate_limit(e):
-                wait = _jittered_backoff(attempt, base=30.0, cap=240.0)
+                wait = _jittered_backoff(attempt, base=20.0, cap=180.0)
                 _yf_trigger_cooldown(wait)
                 log.warning(f"RateLimit dl_since {sym} attempt {attempt+1} — cooldown {wait:.0f}s")
                 time.sleep(wait)
             elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
-                log.warning(f"401 {sym} dl_since attempt {attempt+1} — forcing session rebuild")
-                _force_session_refresh(wait_after=8.0 * (attempt + 1))
+                log.warning(f"401 {sym} dl_since attempt {attempt+1} — reset session")
+                _reset_session()
+                time.sleep(_jittered_backoff(attempt, base=8.0))
             elif "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
                 log.debug(f"ISO timestamp {sym} dl_since attempt {attempt+1}")
                 _reset_session()
@@ -319,82 +285,6 @@ def dl_since(sym: str, interval: str, since_date: str) -> pd.DataFrame | None:
             elif attempt < DL_RETRIES - 1:
                 time.sleep(_jittered_backoff(attempt, base=DL_BACKOFF))
     return None
-
-# ================================================================
-# BATCH DOWNLOAD — multiple stocks in ONE API call
-# ================================================================
-def dl_batch(syms: list[str], interval: str,
-             since_date: str | None = None,
-             period: str | None = None) -> dict[str, pd.DataFrame]:
-    """
-    Download multiple stocks in ONE yfinance call.
-    Reduces API calls by BATCH_SIZE×: 50 stocks = 1 request instead of 50.
-    Returns dict of sym → DataFrame (only stocks that had data).
-
-    yfinance multi-ticker columns layout (group_by='ticker'):
-      df[ticker_sym]  → sub-DataFrame with Open/High/Low/Close/Volume
-    Single-ticker call returns flat columns (same as existing dl/dl_since).
-    """
-    if not syms:
-        return {}
-
-    for attempt in range(DL_RETRIES):
-        _yf_wait_cooldown()
-        try:
-            with _YF_SEMAPHORE:
-                sess = _get_session()
-                kw = {"session": sess} if sess else {}
-                import contextlib, io as _io
-                with contextlib.redirect_stderr(_io.StringIO()):
-                    common = dict(interval=interval, auto_adjust=True,
-                                  progress=False, timeout=60, group_by="ticker", **kw)
-                    if since_date:
-                        raw = yf.download(syms, start=since_date, **common)
-                    else:
-                        raw = yf.download(syms, period=period, **common)
-
-            result: dict[str, pd.DataFrame] = {}
-
-            if len(syms) == 1:
-                # Single-ticker: flat or top-level MultiIndex
-                df = raw
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                df = _normalize_df_index(df.copy()).dropna()
-                if len(df) > 0 and "Close" in df.columns:
-                    result[syms[0]] = df
-            else:
-                # Multi-ticker with group_by='ticker':
-                # columns = MultiIndex (ticker, price_field)
-                for sym in syms:
-                    try:
-                        sym_df = raw[sym].copy()
-                        if isinstance(sym_df.columns, pd.MultiIndex):
-                            sym_df.columns = sym_df.columns.get_level_values(0)
-                        sym_df = _normalize_df_index(sym_df).dropna()
-                        if len(sym_df) > 0 and "Close" in sym_df.columns:
-                            result[sym] = sym_df
-                    except (KeyError, AttributeError, TypeError):
-                        pass  # stock had no data in this batch
-
-            return result
-
-        except Exception as e:
-            if _is_rate_limit(e):
-                wait = _jittered_backoff(attempt, base=40.0, cap=360.0)
-                _yf_trigger_cooldown(wait)
-                log.warning(f"RateLimit batch/{interval} attempt {attempt+1} — "
-                             f"cooldown {wait:.0f}s ({len(syms)} stocks)")
-                time.sleep(wait)
-            elif "401" in str(e) or "Unauthorized" in str(e) or "Crumb" in str(e):
-                log.warning(f"401 batch/{interval} attempt {attempt+1} — forcing session rebuild")
-                _force_session_refresh(wait_after=8.0 * (attempt + 1))
-            elif attempt < DL_RETRIES - 1:
-                time.sleep(_jittered_backoff(attempt, base=DL_BACKOFF))
-
-    log.warning(f"dl_batch failed after {DL_RETRIES} attempts "
-                f"({len(syms)} stocks, {interval})")
-    return {}
 
 # ================================================================
 # UNIVERSE
@@ -680,44 +570,6 @@ def write_fund(stock: str, fund: dict):
         pass
 
 # ================================================================
-# FUNDAMENTALS WEEKLY GUARD
-# fund_cache uses a weekly GitHub Actions cache key, so the DB persists
-# across daily runs within the same week. We store a __meta__ marker row
-# to skip the 2144-stock prefetch on subsequent days of the same week.
-# ================================================================
-FUND_INTERVAL_DAYS = 7  # re-run fundamentals at most once every N days
-
-def _fundamentals_last_run() -> "date | None":
-    """Return the date fundamentals were last pre-fetched (from DB meta row)."""
-    try:
-        con = _get_db()
-        row = con.execute(
-            "SELECT updated_date FROM fund_cache WHERE stock='__meta__'"
-        ).fetchone()
-        if row and row[0]:
-            from datetime import date as _date
-            return _date.fromisoformat(row[0])
-    except Exception:
-        pass
-    return None
-
-def _mark_fundamentals_ran():
-    """Record today as the date fundamentals were last successfully run."""
-    try:
-        con = _get_db()
-        with _db_lock:
-            marker_json = '{"type":"fundamentals_run_marker"}'
-            con.execute(
-                "INSERT OR REPLACE INTO fund_cache (stock,fund_json,updated_date) "
-                "VALUES ('__meta__', ?, ?)",
-                (marker_json, str(_today()))
-            )
-            con.commit()
-        log.info(f"Fundamentals marker updated — next run in {FUND_INTERVAL_DAYS}d")
-    except Exception as e:
-        log.debug(f"Mark fundamentals ran: {e}")
-
-# ================================================================
 # RESAMPLE — 30m / 45m / 75m from 15m base
 # ================================================================
 def resample_tf(df_15m: pd.DataFrame, tf: str) -> pd.DataFrame | None:
@@ -745,223 +597,6 @@ def resample_tf(df_15m: pd.DataFrame, tf: str) -> pd.DataFrame | None:
     except Exception as e:
         log.debug(f"Resample {tf}: {e}")
         return None
-
-def resample_daily_to_tf(df_1d: pd.DataFrame, tf: str) -> pd.DataFrame | None:
-    """
-    Resample daily (1d) OHLCV to weekly (1wk) or monthly (1mo).
-    Used instead of downloading 1wk/1mo from Yahoo — eliminates 2/3 of EOD API calls.
-
-    Weekly rule 'W-SUN': week period = Mon–Sun, label='left' → label = Monday.
-      This matches yfinance's own weekly bar convention (bars labelled Monday).
-      NSE trades Mon–Fri so all trading data falls within the Mon–Sun window.
-
-    Monthly rule 'MS': labels the 1st of each calendar month — matches yfinance.
-
-    The current (incomplete) period is intentionally kept — it shows the latest
-    close in real time, which is what you want for scanning.
-    """
-    if df_1d is None or len(df_1d) < 5:
-        return None
-    rule_map = {
-        "1wk": "W-SUN",  # Week anchored to Sunday → Mon-Sun window → Monday label
-        "1mo": "MS",      # Month Start → 1st of month label
-    }
-    rule = rule_map.get(tf)
-    if not rule:
-        return None
-    try:
-        df = df_1d.copy()
-        df.index = pd.to_datetime(df.index)
-        resampled = df.resample(rule, label="left", closed="left").agg({
-            "Open":   "first",
-            "High":   "max",
-            "Low":    "min",
-            "Close":  "last",
-            "Volume": "sum",
-        }).dropna(subset=["Close"])
-        return resampled if len(resampled) > 0 else None
-    except Exception as e:
-        log.debug(f"resample_daily_to_tf {tf}: {e}")
-        return None
-
-def _last_complete_trading_date() -> str:
-    """
-    Returns the date string ('YYYY-MM-DD') of the last COMPLETED NSE trading day.
-
-    Rules applied in order:
-      1. If today is Saturday → last trading day was Friday.
-      2. If today is Sunday   → last trading day was Friday.
-      3. If today is a weekday AND market is still open (before 15:30 IST)
-         → last complete day = most recent prior weekday.
-      4. If today is a weekday AND market has closed (>= 15:30 IST)
-         → last complete day = today.
-
-    Exchange holidays are not accounted for (would require a maintained
-    calendar). For skip/fetch logic this is acceptable — at worst we make
-    one extra incremental fetch on a holiday, which Yahoo returns empty for.
-    """
-    now  = _now()
-    d    = now.date()
-    dow  = d.weekday()   # 0 = Monday … 6 = Sunday
-
-    # Weekend: roll back to Friday
-    if dow == 5:          # Saturday
-        d -= timedelta(days=1)
-    elif dow == 6:        # Sunday
-        d -= timedelta(days=2)
-    else:
-        # Weekday: check if market has closed yet
-        market_closed = now.hour > 15 or (now.hour == 15 and now.minute >= 30)
-        if not market_closed:
-            # Market still open — last complete session was previous weekday
-            d -= timedelta(days=1)
-            while d.weekday() >= 5:   # skip weekend if Monday
-                d -= timedelta(days=1)
-
-    return str(d)
-
-def _resample_eod_from_daily(stocks: list[str]):
-    """
-    Compute 1wk and 1mo candles from already-cached 1d data for all stocks.
-    Zero API calls — pure in-cache computation.
-    Called by run_eod_update after 1d downloads are done.
-    """
-    log.info(f"Resampling 1wk/1mo from 1d cache ({len(stocks)} stocks)...")
-    t0 = time.time()
-    ok = skip = 0
-    for sym in stocks:
-        df_1d = read_cache(sym, "1d")
-        if df_1d is None or len(df_1d) < 5:
-            skip += 1
-            continue
-        for tf in ("1wk", "1mo"):
-            df_tf = resample_daily_to_tf(df_1d, tf)
-            if df_tf is not None and len(df_tf) > 0:
-                write_cache(sym, tf, df_tf)
-                ok += 1
-            else:
-                skip += 1
-    log.info(f"Resample done in {time.time()-t0:.1f}s | ok={ok} skip={skip}")
-
-# ================================================================
-# NSE BHAV COPY — official EOD fallback when Yahoo fails
-# ================================================================
-# NSE publishes a free "Bhav Copy" CSV after market close each day with
-# OHLCV for every listed EQ-series stock. No authentication, no rate limit.
-# Used as a fallback to fill 1d bars that Yahoo failed to deliver.
-#
-# URL pattern (post-2024 format):
-#   https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_DDMMYYYY.csv
-# Fallback (older mirror):
-#   https://archives.nseindia.com/products/content/sec_bhavdata_full_DDMMYYYY.csv
-# ================================================================
-_BHAV_URLS = [
-    "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{dt}.csv",
-    "https://archives.nseindia.com/products/content/sec_bhavdata_full_{dt}.csv",
-]
-_BHAV_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
-    ),
-    "Referer": "https://www.nseindia.com/",
-}
-
-def _fetch_bhav_copy(trade_date: str) -> "pd.DataFrame | None":
-    """
-    Download NSE Bhav Copy CSV for a given trade_date ('YYYY-MM-DD').
-    Returns a DataFrame indexed by '{SYMBOL}.NS' with OHLCV columns,
-    or None if the file is unavailable (holiday, future date, network error).
-    """
-    import requests as req
-    d = datetime.strptime(trade_date, "%Y-%m-%d")
-    dt_str = d.strftime("%d%m%Y")   # DDMMYYYY format NSE uses in filename
-
-    for url_tmpl in _BHAV_URLS:
-        url = url_tmpl.format(dt=dt_str)
-        for attempt in range(3):
-            try:
-                resp = req.get(url, headers=_BHAV_HEADERS, timeout=30)
-                if resp.status_code == 404:
-                    break   # file doesn't exist for this date (holiday/future)
-                resp.raise_for_status()
-
-                df = pd.read_csv(StringIO(resp.text))
-                # Normalise column names (NSE has changed these over time)
-                df.columns = [c.strip().upper() for c in df.columns]
-
-                # Keep EQ series only
-                series_col = next((c for c in df.columns if "SERIES" in c), None)
-                if series_col:
-                    df = df[df[series_col].str.strip() == "EQ"]
-
-                # Map to standard OHLCV names — column names vary by format
-                col_map = {
-                    # Try both old and new column name variants
-                    "SYMBOL":     "symbol",
-                    "OPEN_PRICE": "Open",  "OPEN":  "Open",
-                    "HIGH_PRICE": "High",  "HIGH":  "High",
-                    "LOW_PRICE":  "Low",   "LOW":   "Low",
-                    "CLOSE_PRICE":"Close", "CLOSE": "Close",
-                    "TTL_TRD_QNTY":"Volume","TOTTRDQTY":"Volume","VOLUME":"Volume",
-                }
-                df = df.rename(columns={c: col_map[c] for c in df.columns if c in col_map})
-                required = {"symbol", "Open", "High", "Low", "Close", "Volume"}
-                if not required.issubset(df.columns):
-                    log.warning(f"Bhav Copy missing columns: {df.columns.tolist()}")
-                    break
-
-                df["symbol"] = df["symbol"].str.strip() + ".NS"
-                df = df.set_index("symbol")[["Open", "High", "Low", "Close", "Volume"]]
-                df = df.apply(pd.to_numeric, errors="coerce").dropna()
-                df.index.name = None
-                log.info(f"Bhav Copy {trade_date}: {len(df)} stocks loaded")
-                return df
-
-            except Exception as e:
-                log.debug(f"Bhav Copy {url} attempt {attempt+1}: {e}")
-                time.sleep(3 * (attempt + 1))
-
-    log.warning(f"Bhav Copy unavailable for {trade_date}")
-    return None
-
-def _fill_missing_from_bhav(stocks: list[str], trade_date: str,
-                             last_dates: dict[str, str]) -> tuple[int, int]:
-    """
-    For stocks whose last_date < trade_date (Yahoo failed them), try to fill
-    today's 1d bar from the Bhav Copy.
-    Returns (filled_count, still_missing_count).
-    """
-    # Identify stocks that are still behind
-    missing = [s for s in stocks if (last_dates.get(s) or "") < trade_date]
-    if not missing:
-        return 0, 0
-
-    log.info(f"Bhav Copy fallback: {len(missing)} stocks still missing {trade_date} bar")
-    bhav = _fetch_bhav_copy(trade_date)
-    if bhav is None:
-        return 0, len(missing)
-
-    filled = still_missing = 0
-    for sym in missing:
-        if sym not in bhav.index:
-            still_missing += 1
-            continue
-        row = bhav.loc[sym]
-        # Build a one-row DataFrame so write_cache can process it
-        df_bar = pd.DataFrame(
-            [[row["Open"], row["High"], row["Low"], row["Close"], row["Volume"]]],
-            index=[pd.Timestamp(trade_date)],
-            columns=["Open", "High", "Low", "Close", "Volume"],
-        )
-        n = write_cache(sym, "1d", df_bar)
-        if n > 0:
-            filled += 1
-        else:
-            still_missing += 1
-
-    log.info(f"Bhav Copy fill: filled={filled} still-missing={still_missing}")
-    return filled, still_missing
 
 # ================================================================
 # LAST COMPLETE BAR — don't include forming candles
@@ -1274,281 +909,47 @@ def run_gap_scan(stocks: list[str]) -> list[dict]:
 # BATCH RUNNERS
 # ================================================================
 def run_eod_update(stocks: list[str]):
-    """
-    Update 1d/1wk/1mo for all stocks.
-
-    API calls: only for 1d.
-    1wk / 1mo: computed by resampling cached 1d data — zero extra API calls.
-
-    Skip logic (per stock):
-      After market close (> 15:30 IST):
-        Skip if last_date >= today  → today's complete bar already stored.
-      During market hours (< 15:30 IST):
-        Skip if last_date >= today  → bar is still forming, don't pollute cache
-        with a partial daily candle. Download will run again post-close.
-        Exception: if last_date < yesterday → data is stale, fetch regardless.
-
-    In practice:
-      Night / CI run (22:55 IST)  → skip all stocks already updated today.
-      Mid-day manual run (14:30)  → skip only stocks whose last_date == today
-                                    (shouldn't exist yet); fetch everything else.
-      Thursday night              → last_date == Thursday → all skipped ✓
-      Friday morning re-run       → last_date == Thursday < Friday → all fetched ✓
-
-    Failed batches are retried once after RETRY_COOLDOWN seconds.
-    """
-    last_complete = _last_complete_trading_date()
-    log.info(f"EOD update: {len(stocks)} stocks | last complete trading date={last_complete} "
-             f"| batch={BATCH_SIZE} delay={BATCH_DELAY}s")
+    """Update 1d/1wk/1mo for all stocks in parallel."""
+    log.info(f"EOD update: {len(stocks)} stocks × {TF_EOD}")
     t0 = time.time()
-
-    # ── Phase 1: Download 1d only ────────────────────────────────────────────
     ok = err = skip = 0
-    t_tf = time.time()
 
-    con = _get_db()
-    ld_rows = con.execute(
-        "SELECT stock, last_date FROM cache_meta WHERE tf='1d'"
-    ).fetchall()
-    last_dates: dict[str, str] = {r[0]: r[1] for r in ld_rows}
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futs = {ex.submit(update_stock_eod, s): s for s in stocks}
+        done = 0
+        for fut in as_completed(futs):
+            done += 1
+            try:
+                r = fut.result()
+                ok   += r["ok"]
+                skip += r["skip"]
+                err  += r["err"]
+            except Exception:
+                err += 1
+            if done % 200 == 0:
+                elapsed = time.time() - t0
+                eta = (len(stocks) - done) / (done / elapsed) if done > 0 else 0
+                log.info(f"  EOD: {done}/{len(stocks)} | ok={ok} skip={skip} err={err} | "
+                         f"{elapsed:.0f}s elapsed | ETA {eta:.0f}s")
 
-    # Skip stocks that already have today's (or last complete day's) bar
-    stocks_todo = []
-    for sym in stocks:
-        ld = last_dates.get(sym)
-        if ld and ld[:10] >= last_complete:
-            skip += 1   # already have the complete bar
-        else:
-            stocks_todo.append(sym)
-
-    if skip:
-        log.info(f"  [1d] {skip}/{len(stocks)} stocks already have complete bar — skipping")
-
-    # Group by since_date for optimal batching
-    groups: dict[str | None, list[str]] = {}
-    for sym in stocks_todo:
-        ld = last_dates.get(sym)
-        since = ld[:10] if ld else None
-        groups.setdefault(since, []).append(sym)
-
-    log.info(f"  [1d] {len(stocks_todo)} stocks to fetch | "
-             f"{len(groups)} date-group(s) | "
-             f"~{sum((len(g)-1)//BATCH_SIZE+1 for g in groups.values())} batches")
-
-    batch_num = 0
-    failed_stocks: list[tuple[str, str | None]] = []
-
-    for since, syms_group in groups.items():
-        for i in range(0, len(syms_group), BATCH_SIZE):
-            batch = syms_group[i : i + BATCH_SIZE]
-            batch_num += 1
-
-            data = dl_batch(batch, "1d", since_date=since) if since \
-                   else dl_batch(batch, "1d", period=HISTORY["1d"])
-
-            for sym, df in data.items():
-                n = write_cache(sym, "1d", df)
-                if n > 0: ok += 1
-                else:     skip += 1
-
-            missing = [s for s in batch if s not in data]
-            if missing:
-                err += len(missing)
-                for sym in missing:
-                    failed_stocks.append((sym, since))
-
-            if batch_num % 10 == 0:
-                elapsed = time.time() - t_tf
-                done = min(batch_num * BATCH_SIZE, len(stocks_todo))
-                log.info(f"    [1d] batch {batch_num} | ~{done}/{len(stocks_todo)} | "
-                         f"ok={ok} skip={skip} err={err} | {elapsed:.0f}s")
-
-            time.sleep(BATCH_DELAY)
-
-    # ── Retry pass ────────────────────────────────────────────────────────────
-    if failed_stocks:
-        log.info(f"  [1d] Retrying {len(failed_stocks)} failed stocks "
-                 f"after {RETRY_COOLDOWN}s cooldown...")
-        time.sleep(RETRY_COOLDOWN)
-        retry_groups: dict[str | None, list[str]] = {}
-        for sym, since in failed_stocks:
-            retry_groups.setdefault(since, []).append(sym)
-        retry_ok = retry_err = 0
-        for since, syms_group in retry_groups.items():
-            for i in range(0, len(syms_group), BATCH_SIZE):
-                batch = syms_group[i : i + BATCH_SIZE]
-                data = dl_batch(batch, "1d", since_date=since) if since \
-                       else dl_batch(batch, "1d", period=HISTORY["1d"])
-                for sym, df in data.items():
-                    n = write_cache(sym, "1d", df)
-                    if n > 0:
-                        retry_ok += 1; ok += 1; err -= 1
-                    else:
-                        retry_err += 1
-                retry_err += len(batch) - len(data)
-                time.sleep(BATCH_DELAY * 3)
-        log.info(f"  [1d] Retry: recovered={retry_ok} still-failed={retry_err}")
-
-    log.info(f"  [1d] done: {time.time()-t_tf:.1f}s | ok={ok} skip={skip} err={err}")
-
-    # ── Phase 1b: Bhav Copy fallback for stocks Yahoo still couldn't deliver ──
-    # Only fires after market close — Bhav Copy isn't published intraday.
-    now = _now()
-    market_closed = now.hour > 15 or (now.hour == 15 and now.minute >= 30)
-    if err > 0 and market_closed:
-        # Re-read last_dates from DB (some may have been updated by retry pass)
-        con = _get_db()
-        ld_rows = con.execute(
-            "SELECT stock, last_date FROM cache_meta WHERE tf='1d'"
-        ).fetchall()
-        updated_last_dates = {r[0]: r[1] for r in ld_rows}
-        bhav_filled, bhav_missing = _fill_missing_from_bhav(
-            stocks, last_complete, updated_last_dates
-        )
-        ok  += bhav_filled
-        err -= bhav_filled
-        log.info(f"  [1d] After Bhav Copy: ok={ok} err={err}")
-
-    # ── Phase 2: Resample 1d → 1wk and 1mo (zero API calls) ─────────────────
-    # Run for ALL stocks (not just stocks_todo) so weekly/monthly bars stay
-    # current even for stocks whose daily bar was already up to date.
-    _resample_eod_from_daily(stocks)
-
-    log.info(f"EOD done: {time.time()-t0:.1f}s | 1d ok={ok} err={err}")
-
+    log.info(f"EOD done: {time.time()-t0:.1f}s | ok={ok} skip={skip} err={err}")
 
 def run_intraday_update(stocks: list[str]):
-    """
-    Update 15m + 1h for watchlist stocks using BATCH downloads.
-    Same batch strategy as run_eod_update — groups by last_date, batches 50 at a time.
-    Skips stocks whose cached last bar already equals the most recent complete bar
-    (principled check via last_complete_bar(), not a time-delta heuristic).
-    Retries failed batches once after RETRY_COOLDOWN seconds.
-    Filters out incomplete (still-forming) bars before writing to cache.
-    """
-    log.info(f"Intraday batch update: {len(stocks)} stocks × {TF_INTRADAY} "
-             f"| batch={BATCH_SIZE}")
+    """Update 15m + 1h for watchlist stocks."""
+    log.info(f"Intraday update: {len(stocks)} stocks × {TF_INTRADAY}")
     t0 = time.time()
-    ok_total = err_total = skip_total = 0
+    ok = err = 0
 
-    for tf in TF_INTRADAY:
-        ok = err = skip = 0
-        interval_min = 15 if tf == "15m" else 60
-        # The timestamp of the last bar that has fully closed
-        cutoff_bar = last_complete_bar(interval_min)
-
-        # Pre-fetch last_dates in one query (last_updated not needed — we
-        # compare last_date directly against cutoff_bar, which is precise)
-        con = _get_db()
-        ld_rows = con.execute(
-            "SELECT stock, last_date FROM cache_meta WHERE tf=?", (tf,)
-        ).fetchall()
-        last_dates: dict[str, str] = {r[0]: r[1] for r in ld_rows}
-
-        def _is_fresh(sym: str, _cutoff=cutoff_bar) -> bool:
-            """
-            True if the cached last bar for this stock is already the most
-            recent completed bar — no new complete bar exists yet to fetch.
-            Comparison: last_date >= last_complete_bar(interval_min)
-            """
-            ld = last_dates.get(sym)
-            if not ld:
-                return False
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:  # MAX_WORKERS=5 (not 10 — rate-limit safe)
+        futs = {ex.submit(update_stock_intraday, s): s for s in stocks}
+        for fut in as_completed(futs):
             try:
-                ld_dt = pd.to_datetime(ld)
-                # Normalize both to tz-naive for comparison
-                if hasattr(_cutoff, 'tzinfo') and _cutoff.tzinfo is not None:
-                    _cutoff_naive = _cutoff.replace(tzinfo=None)
-                else:
-                    _cutoff_naive = _cutoff
-                if ld_dt.tzinfo is not None:
-                    ld_dt = ld_dt.tz_localize(None)
-                return ld_dt >= _cutoff_naive
+                r = fut.result()
+                ok += r["ok"]; err += r["err"]
             except Exception:
-                return False
+                err += 1
 
-        stocks_todo = [s for s in stocks if not _is_fresh(s)]
-        already_done = len(stocks) - len(stocks_todo)
-        if already_done:
-            skip += already_done
-            log.info(f"  [{tf}] {already_done} stocks already at latest bar "
-                     f"({cutoff_bar.strftime('%H:%M')}) — skipping")
-
-        # Group by since_date
-        groups: dict[str | None, list[str]] = {}
-        for sym in stocks_todo:
-            ld = last_dates.get(sym)
-            since = ld[:10] if ld else None
-            groups.setdefault(since, []).append(sym)
-
-        batch_num = 0
-        failed_stocks: list[tuple[str, str | None]] = []
-
-        for since, syms_group in groups.items():
-            for i in range(0, len(syms_group), BATCH_SIZE):
-                batch = syms_group[i : i + BATCH_SIZE]
-                batch_num += 1
-
-                if since:
-                    data = dl_batch(batch, tf, since_date=since)
-                else:
-                    data = dl_batch(batch, tf, period=HISTORY[tf])
-
-                for sym, df in data.items():
-                    # Filter: only complete bars (drop the forming bar)
-                    df.index = pd.to_datetime(df.index)
-                    df = df[df.index <= cutoff_bar]
-                    if len(df) == 0:
-                        skip += 1
-                        continue
-                    n = write_cache(sym, tf, df)
-                    if n > 0:
-                        ok += 1
-                        # Update RVOL profile from 15m data
-                        if tf == "15m":
-                            try:
-                                df_full = read_cache(sym, "15m", limit=2000)
-                                if df_full is not None:
-                                    update_rvol_profile(sym, df_full)
-                            except Exception:
-                                pass
-                    else:
-                        skip += 1
-
-                missing = [s for s in batch if s not in data]
-                if missing:
-                    err += len(missing)
-                    for sym in missing:
-                        failed_stocks.append((sym, since))
-
-                time.sleep(BATCH_DELAY)
-
-        # ── Retry pass ────────────────────────────────────────────────────────────
-        if failed_stocks:
-            log.info(f"  [{tf}] Retrying {len(failed_stocks)} failed stocks after {RETRY_COOLDOWN}s...")
-            time.sleep(RETRY_COOLDOWN)
-            retry_groups: dict[str | None, list[str]] = {}
-            for sym, since in failed_stocks:
-                retry_groups.setdefault(since, []).append(sym)
-            for since, syms_group in retry_groups.items():
-                for i in range(0, len(syms_group), BATCH_SIZE):
-                    batch = syms_group[i : i + BATCH_SIZE]
-                    data = dl_batch(batch, tf, since_date=since) if since \
-                           else dl_batch(batch, tf, period=HISTORY[tf])
-                    for sym, df in data.items():
-                        df.index = pd.to_datetime(df.index)
-                        df = df[df.index <= cutoff_bar]
-                        if len(df) > 0:
-                            n = write_cache(sym, tf, df)
-                            if n > 0:
-                                ok  += 1
-                                err -= 1
-                    time.sleep(BATCH_DELAY * 3)
-
-        log.info(f"  [{tf}] done | ok={ok} skip={skip} err={err} | {batch_num} batches")
-        ok_total += ok; err_total += err; skip_total += skip
-
-    log.info(f"Intraday done: {time.time()-t0:.1f}s | ok={ok_total} err={err_total}")
+    log.info(f"Intraday done: {time.time()-t0:.1f}s | ok={ok} err={err}")
 
 # ================================================================
 # BOOTSTRAP — full download, run once
@@ -1558,12 +959,11 @@ def run_bootstrap(stocks: list[str]):
     Full historical download for all stocks and all timeframes.
     Run once manually. After this, --daily and --intraday only fetch diffs.
 
-    NOW uses batch downloads (50 stocks per API call) in all 3 phases.
     Timeline estimate (2000 stocks):
-      1d/1wk/1mo:  ~5-8 min   (was 15-20 min — batch downloads ~49× fewer calls)
-      1h:          ~5-8 min   (was 15-20 min)
-      15m:         ~8-12 min  (was 20-25 min)
-      Total:       ~20-30 min (was 55-65 min)
+      1d/1wk/1mo:  ~15-20 min
+      1h:          ~15-20 min
+      15m:         ~20-25 min (60d limit, still 2000 stocks)
+      Total:       ~55-65 min (first time only)
     """
     log.info(f"=== BOOTSTRAP: {len(stocks)} stocks, all timeframes ===")
     log.info("This runs once. Estimated time: 55-65 min.")
@@ -1572,67 +972,71 @@ def run_bootstrap(stocks: list[str]):
     log.info("Phase 1/3: EOD data (1d, 1wk, 1mo)...")
     run_eod_update(stocks)
 
-    # Phase 2: Hourly — batch download, skip already-cached
-    log.info("Phase 2/3: Hourly data (1h, 2yr) — batch downloads...")
+    # Phase 2: Hourly
+    log.info("Phase 2/3: Hourly data (1h, 2yr)...")
     t0 = time.time()
     ok = err = skip = 0
 
-    # Pre-check which stocks already have 1h data
-    con = _get_db()
-    have_1h = {r[0] for r in con.execute(
-        "SELECT stock FROM cache_meta WHERE tf='1h'"
-    ).fetchall()}
-    to_fetch_1h = [s for s in stocks if s not in have_1h]
-    log.info(f"  1h: {len(to_fetch_1h)} to fetch, {len(have_1h)} already cached")
+    def _fetch_1h(sym):
+        # Skip if already have 1h data
+        existing = get_last_date(sym, "1h")
+        if existing:
+            return -1  # already done
+        df = dl(sym, "1h", "2y")
+        if df is not None and len(df) > 0:
+            return write_cache(sym, "1h", df)
+        return 0
 
-    batch_num = 0
-    for i in range(0, len(to_fetch_1h), BATCH_SIZE):
-        batch = to_fetch_1h[i : i + BATCH_SIZE]
-        batch_num += 1
-        data = dl_batch(batch, "1h", period="2y")
-        for sym, df in data.items():
-            n = write_cache(sym, "1h", df)
-            if n > 0: ok += 1
-            else:     skip += 1
-        err += len(batch) - len(data)
-        if batch_num % 10 == 0:
-            log.info(f"  1h: batch {batch_num} | ok={ok} skip={skip} err={err}")
-        time.sleep(BATCH_DELAY)
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futs = {ex.submit(_fetch_1h, s): s for s in stocks}
+        done = 0
+        for fut in as_completed(futs):
+            done += 1
+            try:
+                n = fut.result()
+                if n == -1: skip += 1
+                elif n: ok += 1
+                else: err += 1
+            except Exception:
+                err += 1
+            if done % 200 == 0:
+                log.info(f"  1h: {done}/{len(stocks)} | ok={ok} skip={skip} err={err}")
 
-    log.info(f"Phase 2 done: {time.time()-t0:.1f}s | ok={ok} skip={skip} err={err}")
+    log.info(f"Phase 2 done: {time.time()-t0:.1f}s")
 
-    # Phase 3: 15min — batch download, skip already-cached
-    log.info("Phase 3/3: 15min data (60d limit) — batch downloads...")
+    # Phase 3: 15min (60d limit per call)
+    log.info("Phase 3/3: 15min data (60d limit per call)...")
     t0 = time.time()
-    ok = err = skip = 0
+    ok = err = 0
 
-    have_15m = {r[0] for r in con.execute(
-        "SELECT stock FROM cache_meta WHERE tf='15m'"
-    ).fetchall()}
-    to_fetch_15m = [s for s in stocks if s not in have_15m]
-    log.info(f"  15m: {len(to_fetch_15m)} to fetch, {len(have_15m)} already cached")
+    def _fetch_15m(sym):
+        # Skip if already have 15m data (allows resume after timeout)
+        existing = get_last_date(sym, "15m")
+        if existing:
+            return -1  # already done
+        df = dl(sym, "15m", "60d")
+        if df is None or len(df) == 0:
+            return 0
+        n = write_cache(sym, "15m", df)
+        if n > 0:
+            update_rvol_profile(sym, df)
+        return n
 
-    batch_num = 0
-    for i in range(0, len(to_fetch_15m), BATCH_SIZE):
-        batch = to_fetch_15m[i : i + BATCH_SIZE]
-        batch_num += 1
-        data = dl_batch(batch, "15m", period="60d")
-        for sym, df in data.items():
-            n = write_cache(sym, "15m", df)
-            if n > 0:
-                ok += 1
-                try:
-                    update_rvol_profile(sym, df)
-                except Exception:
-                    pass
-            else:
-                skip += 1
-        err += len(batch) - len(data)
-        if batch_num % 10 == 0:
-            log.info(f"  15m: batch {batch_num} | ok={ok} skip={skip} err={err}")
-        time.sleep(BATCH_DELAY)
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futs = {ex.submit(_fetch_15m, s): s for s in stocks}
+        done = 0
+        for fut in as_completed(futs):
+            done += 1
+            try:
+                n = fut.result()
+                if n: ok += 1
+                else: err += 1
+            except Exception:
+                err += 1
+            if done % 200 == 0:
+                log.info(f"  15m: {done}/{len(stocks)} | ok={ok} err={err}")
 
-    log.info(f"Phase 3 done: {time.time()-t0:.1f}s | ok={ok} skip={skip} err={err}")
+    log.info(f"Phase 3 done: {time.time()-t0:.1f}s")
 
     # Sector indices
     update_sectors()
@@ -1705,8 +1109,6 @@ def main():
     mode.add_argument("--gap",        action="store_true", help="Gap scanner (9:20 AM)")
     mode.add_argument("--sectors",    action="store_true", help="Update sector indices")
     mode.add_argument("--stats",      action="store_true", help="Print cache statistics")
-    mode.add_argument("--fundamentals", action="store_true",
-                      help="Weekly fundamentals prefetch (run via dedicated weekly job)")
     ap.add_argument("--telegram",     action="store_true")
     args = ap.parse_args()
 
@@ -1749,23 +1151,26 @@ def main():
         run_eod_update(stocks)
         update_sectors()
 
-        # Fundamentals moved to dedicated weekly job (--fundamentals flag / weekly cron).
-        # This keeps --daily consistently under 30 min every weekday.
-        return
-
-    if args.fundamentals:
-        log.info(f"=== Weekly fundamentals prefetch {_ist()} ===")
-        stocks = load_universe()
+        # IR5 FIX: Pre-fetch fundamentals BEFORE scanner.py --daily runs.
+        # Old behaviour: disabled to avoid 401 rate-limiting.
+        # Root cause of 401s was NOT the pre-fetch itself but calling fundamentals
+        # on 2100+ stocks during the scan window via 4 workers simultaneously.
+        # Fix: single-threaded pre-fetch here at 1 req/sec (screener.in safe rate).
+        # Scanner then reads cache with <1ms overhead per stock — zero live calls.
+        #
+        # Only updates stocks NOT already cached within 7 days (TTL).
+        # Typical weekday: ~150-300 stocks need refresh (new listings + TTL expiry).
+        # At 1 req/sec + ~2s screener.in parse time → ~5-10 min for full refresh.
+        # Runs AFTER EOD price update so scan has both fresh OHLCV + fresh fundamentals.
         try:
             from fundamentals import prefetch_fundamentals
-            log.info(f"Running Piotroski + pledge prefetch for {len(stocks)} stocks ...")
+            log.info("IR5: Pre-fetching fundamentals (Piotroski + pledge, 7-day TTL)...")
             prefetch_fundamentals(stocks, workers=1, delay=1.2)
-            _mark_fundamentals_ran()
-            log.info("Fundamentals prefetch complete")
+            log.info("IR5: Fundamentals pre-fetch complete")
         except ImportError:
-            log.error("fundamentals.py not found")
+            log.warning("fundamentals.py not found — skipping pre-fetch")
         except Exception as e:
-            log.error(f"Fundamentals prefetch failed: {e}")
+            log.warning(f"IR5: Fundamentals pre-fetch error (non-critical): {e}")
         return
 
     if args.bootstrap:
