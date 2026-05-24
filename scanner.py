@@ -151,63 +151,30 @@ DL_BACKOFF   = 2.0
 #   → all retry simultaneously → 429 again. Classic thundering herd.
 #
 # Fix: three-layer defence
-#   1. _YF_SEMAPHORE  — global concurrent-call cap (max 4 live Yahoo calls)
-#      Reduced risk of rate limits now that we give up fast (2 retries vs 6).
+#   1. _YF_SEMAPHORE  — global concurrent-call cap (max 2 live Yahoo calls)
 #   2. _YF_COOLDOWN   — threading.Event cleared when any thread hits 429;
 #                       all threads block on wait() before next attempt.
 #   3. Exponential backoff with ±jitter — desynchronises retries across threads.
 #
-# Result: Yahoo sees ≤4 concurrent connections with fast failure for bad stocks.
+# Result: Yahoo sees ≤2 concurrent connections, never a retry burst.
 # ================================================================
 import threading as _threading
 import random    as _random
 
-_YF_SEMAPHORE      = _threading.Semaphore(4)    # allow 4 concurrent Yahoo calls
-                                                  # reduced to 4 from 1 with fast retries (2 vs 6)
-_YF_COOLDOWN       = _threading.Event()
+_YF_SEMAPHORE   = _threading.Semaphore(2)    # max 2 concurrent Yahoo calls
+_YF_COOLDOWN    = _threading.Event()
 _YF_COOLDOWN.set()   # set = "clear to proceed"; cleared = "rate-limited, wait"
-_YF_COOLDOWN_LOCK  = _threading.Lock()
+_YF_COOLDOWN_LOCK = _threading.Lock()
 _YF_COOLDOWN_UNTIL = 0.0   # epoch seconds — shared cooldown end time
 
-# Minimum wall-clock gap between consecutive Yahoo Finance HTTP calls.
-# Token-bucket style: even if the semaphore is free, no call fires sooner
-# than _YF_MIN_INTERVAL seconds after the previous one completed.
-# 0.4s → max ~2.5 calls/sec; well under Yahoo's observed ~5 req/sec threshold.
-_YF_LAST_CALL_TIME = 0.0
-_YF_MIN_INTERVAL   = 0.4   # seconds between Yahoo calls
-_YF_SKIP_STOCKS    = set()   # stocks that failed yfinance 2+ times — give up on them
-_YF_SKIP_LOCK      = Lock()
-
-def _should_skip_stock(sym: str) -> bool:
-    """Check if a stock has failed too many times (yfinance unavailable)."""
-    with _YF_SKIP_LOCK:
-        return sym in _YF_SKIP_STOCKS
-
-def _mark_stock_skip(sym: str):
-    """Mark stock as unavailable after repeated failures."""
-    with _YF_SKIP_LOCK:
-        _YF_SKIP_STOCKS.add(sym)
-        log.debug(f"Skipping {sym} — too many failures")
-
 def _yf_wait_cooldown():
-    """Block until global rate-limit cooldown AND min-interval pacing both clear."""
+    """Block until global rate-limit cooldown expires."""
     import time as _t
-    global _YF_COOLDOWN_UNTIL, _YF_LAST_CALL_TIME
-
-    # 1. Honour any active cooldown (triggered by a 429)
+    global _YF_COOLDOWN_UNTIL
     remaining = _YF_COOLDOWN_UNTIL - _t.time()
     if remaining > 0:
         log.debug(f"Cooldown: waiting {remaining:.1f}s")
         _t.sleep(remaining + _random.uniform(0, 1))
-
-    # 2. Token-bucket pacing: enforce _YF_MIN_INTERVAL between calls.
-    # Uses the same _YF_COOLDOWN_LOCK so the read-modify-write is atomic.
-    with _YF_COOLDOWN_LOCK:
-        now  = _t.time()
-        wait = _YF_LAST_CALL_TIME + _YF_MIN_INTERVAL - now
-        if wait > 0:
-            _t.sleep(wait)
-        _YF_LAST_CALL_TIME = _t.time()
 
 def _yf_trigger_cooldown(base_wait: float):
     """Called by any thread that hits 429. Sets global cooldown for all threads."""
@@ -350,33 +317,8 @@ def get_db():
         CREATE INDEX IF NOT EXISTS idx_sig_date ON signals(scan_date);
         CREATE INDEX IF NOT EXISTS idx_sig_stock ON signals(stock);
         CREATE INDEX IF NOT EXISTS idx_alerts ON alerts_sent(scan_date,stock);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sig_dedup ON signals(stock, pattern, scan_date);
     """)
-    # ── Unique dedup index — created separately so we can fix duplicates first ──
-    # If the DB already has duplicate (stock, pattern, scan_date) rows (from a prior
-    # run before this index existed), CREATE UNIQUE INDEX raises IntegrityError.
-    # We detect that case, purge the duplicates (keeping the latest id), then retry.
-    try:
-        con.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sig_dedup "
-            "ON signals(stock, pattern, scan_date)"
-        )
-        con.commit()
-    except sqlite3.IntegrityError:
-        # Duplicates present — keep only the highest-id row per unique key
-        con.execute("""
-            DELETE FROM signals
-            WHERE id NOT IN (
-                SELECT MAX(id)
-                FROM signals
-                GROUP BY stock, pattern, scan_date
-            )
-        """)
-        con.commit()
-        con.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sig_dedup "
-            "ON signals(stock, pattern, scan_date)"
-        )
-        con.commit()
     # ── Schema migration: add columns that may be missing from older DB ──────
     # SQLite does not support IF NOT EXISTS on ALTER TABLE — use try/except
     _new_cols = [
@@ -711,24 +653,17 @@ def _cache_meta(stock: str) -> dict:
     return {}
 
 
-FUND_CACHE_DAYS = 3   # fundamentals (market cap, growth, holdings) change slowly;
-                      # 3-day TTL cuts Yahoo calls by ~85% on repeated daily runs.
-
 def _fund_cache_read(stock: str) -> dict | None:
-    """Read cached fundamentals. Tries data_updater's fund_cache table first, then old schema.
-    TTL: FUND_CACHE_DAYS (default 3) instead of same-day only — avoids re-fetching 500
-    Ticker.info calls every single day when data rarely changes.
-    """
+    """Read cached fundamentals. Tries data_updater's fund_cache table first, then old schema."""
     try:
         con = _get_cache()
-        cutoff = str(date.today() - timedelta(days=FUND_CACHE_DAYS))
         # New schema: data_updater stores in fund_cache(stock, fund_json, updated_date)
         try:
             row = con.execute(
                 "SELECT fund_json, updated_date FROM fund_cache WHERE stock=?",
                 (stock,)
             ).fetchone()
-            if row and row[0] and row[1] and row[1] >= cutoff:
+            if row and row[0] and row[1] == str(_today()):
                 return json.loads(row[0])
         except Exception:
             pass
@@ -738,7 +673,7 @@ def _fund_cache_read(stock: str) -> dict | None:
                 "SELECT fund_json, fund_updated FROM cache_meta WHERE stock=?",
                 (stock,)
             ).fetchone()
-            if row and row[0] and row[1] and row[1] >= cutoff:
+            if row and row[0] and row[1] == str(_today()):
                 return json.loads(row[0])
         except Exception:
             pass
@@ -837,106 +772,14 @@ def dl_cached(sym: str, period: str = PERIOD_DAILY) -> pd.DataFrame | None:
 
 
 def dl_fund_cached(sym: str) -> dict:
-    """Fundamentals with same-day cache. Avoids hitting Yahoo 2000× per daily scan.
-    
-    CRITICAL-1 FIX: Before writing new fund, reads stale cache to extract
-    heldPercentInstitutions_prior — enabling O'Neil 'I' direction check.
-    """
+    """Fundamentals with same-day cache. Avoids hitting Yahoo 2000× per daily scan."""
     cached = _fund_cache_read(sym)
     if cached is not None:
         return cached
-    # Read STALE cache to get prior institutional holding before overwrite
-    prior_inst = None
-    try:
-        con = _get_cache()
-        # Try fund_cache table (any date)
-        try:
-            row = con.execute(
-                "SELECT fund_json FROM fund_cache WHERE stock=?", (sym,)
-            ).fetchone()
-            if row and row[0]:
-                old = json.loads(row[0])
-                prior_inst = old.get("heldPercentInstitutions")
-        except Exception:
-            pass
-        if prior_inst is None:
-            # Try old schema
-            try:
-                row = con.execute(
-                    "SELECT fund_json FROM cache_meta WHERE stock=?", (sym,)
-                ).fetchone()
-                if row and row[0]:
-                    old = json.loads(row[0])
-                    prior_inst = old.get("heldPercentInstitutions")
-            except Exception:
-                pass
-    except Exception:
-        pass
     fund = dl_fund(sym)  # raw fetch
     if fund.get("_fund_ok"):
-        # Inject prior institutional % for direction check (CRITICAL-1)
-        if prior_inst is not None:
-            fund["heldPercentInstitutions_prior"] = prior_inst
         _fund_cache_write(sym, fund)
     return fund
-
-
-# Fix 1: batch size for yf.download multi-symbol calls.
-# Yahoo reliably handles ~100 symbols per batch; 50 is conservative.
-YF_BATCH_SIZE = 50
-
-def _batch_dl_full(syms: list, period: str = PERIOD_DAILY) -> dict:
-    """
-    Fix 1: Download OHLCV for multiple symbols in one yf.download() call.
-    Returns {sym: DataFrame} for every sym that came back with data.
-    Falls back to per-symbol dl() for any sym missing from the batch result.
-    """
-    results = {}
-    if not syms:
-        return results
-    for attempt in range(DL_RETRIES):
-        _yf_wait_cooldown()
-        try:
-            with _YF_SEMAPHORE:
-                sess = _get_session()
-                kw   = {"session": sess} if sess is not None else {}
-                raw  = yf.download(
-                    syms,
-                    period=period,
-                    interval="1d",
-                    auto_adjust=True,
-                    progress=False,
-                    timeout=30,
-                    group_by="ticker",   # MultiIndex: (field, symbol)
-                    threads=False,       # let our semaphore control concurrency
-                    **kw,
-                )
-            # Unpack MultiIndex result
-            if isinstance(raw.columns, pd.MultiIndex):
-                for sym in syms:
-                    try:
-                        df = raw.xs(sym, axis=1, level=1).copy() if sym in raw.columns.get_level_values(1) else None
-                        if df is not None and len(df.dropna()) > 20:
-                            results[sym] = _normalize_df_index(df.dropna())
-                    except Exception:
-                        pass
-            elif len(syms) == 1:
-                # Single symbol — yf returns flat columns
-                df = raw.dropna()
-                if len(df) > 20:
-                    results[syms[0]] = _normalize_df_index(df)
-            return results
-        except Exception as e:
-            msg   = str(e)
-            etype = type(e).__name__
-            if "YFRateLimitError" in etype or "429" in msg or "rate limit" in msg.lower():
-                wait = _jittered_backoff(attempt, base=3.0, cap=15.0)  # reduced from base=20 cap=180
-                _yf_trigger_cooldown(wait)
-                log.warning(f"RateLimit batch_dl attempt {attempt+1} — cooldown {wait:.0f}s")
-                time.sleep(wait)
-            elif attempt < DL_RETRIES - 1:
-                time.sleep(_jittered_backoff(attempt, base=DL_BACKOFF))
-    return results
 
 
 def warm_cache(stocks: list, workers: int = 8):
@@ -945,82 +788,38 @@ def warm_cache(stocks: list, workers: int = 8):
     Called once at the start of daily scan.
     Stocks already cached today are skipped instantly.
 
-    Fix 1: stale/missing stocks are downloaded in batches of YF_BATCH_SIZE
-    (one yf.download call per batch) instead of one call per stock.
-    Incremental updates (cache exists but not today) still run per-stock
-    since they only need 7d of data which is cheap.
-
     Gap 2 FIX: After caching, also builds the RS universe dict so that
     calc_rs_percentile() can do true cross-sectional ranking for every stock.
     """
-    today  = str(_today())
-    need   = [s for s in stocks if _cache_meta(s).get("last_updated") != today
-              and not _should_skip_stock(s)]  # skip known bad stocks
-    if not need:
+    today = str(_today())
+    need_full = [s for s in stocks if _cache_meta(s).get("last_updated") != today]
+    if not need_full:
         log.info("Cache: all stocks already up-to-date for today")
     else:
-        log.info(f"Cache warm-up: {len(need)} stocks need update "
-                 f"({len(stocks)-len(need)} already cached today)...")
+        log.info(f"Cache warm-up: {len(need_full)} stocks need update "
+                 f"({len(stocks)-len(need_full)} already cached today)...")
     t0 = time.time()
-
-    # Split into: truly stale/missing (need full download) vs incremental (just 7d)
-    need_full  = []
-    need_incr  = []
-    for s in need:
-        meta = _cache_meta(s)
-        if meta.get("last_updated"):
-            try:
-                last  = pd.to_datetime(meta["last_updated"]).date()
-                stale = (_today() - last).days > STALE_DAYS
-            except Exception:
-                stale = True
-        else:
-            stale = True
-        (need_full if stale else need_incr).append(s)
-
-    log.info(f"  Full-download: {len(need_full)} stocks | Incremental: {len(need_incr)} stocks")
-
-    # ── Batch full downloads (Fix 1) ─────────────────────────────────────
     done = 0
-    for i in range(0, len(need_full), YF_BATCH_SIZE):
-        batch = need_full[i:i + YF_BATCH_SIZE]
-        log.debug(f"  Batch dl {i+1}–{i+len(batch)} of {len(need_full)}")
-        batch_data = _batch_dl_full(batch)
-        for sym in batch:
-            df = batch_data.get(sym)
-            if df is not None:
-                _cache_write(sym, df)
-            else:
-                # Batch missed this symbol — fall back to individual download
-                log.debug(f"  Batch miss {sym} — falling back to dl()")
-                individual = dl(sym, "1d", PERIOD_DAILY)
-                if individual is not None:
-                    _cache_write(sym, individual)
-            done += 1
-        if done % 200 == 0 or done == len(need_full):
-            elapsed = time.time() - t0
-            rate    = done / elapsed if elapsed > 0 else 1
-            eta     = (len(need_full) - done) / rate
-            log.info(f"  Cache full: {done}/{len(need_full)} | {elapsed:.0f}s | ETA {eta:.0f}s")
 
-    # ── Incremental updates (per-stock, cheap 7d fetches) ────────────────
-    def _fetch_incr(sym):
-        return sym, dl_cached(sym)
+    def _fetch_one(sym):
+        return sym, dl_cached(sym)   # dl_cached handles full vs incremental
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(_fetch_incr, s): s for s in need_incr}
-        idone = 0
+        futs = {ex.submit(_fetch_one, s): s for s in need_full}
         for fut in as_completed(futs):
-            idone += 1
-            if idone % 200 == 0:
+            done += 1
+            if done % 200 == 0:
                 elapsed = time.time() - t0
-                log.info(f"  Cache incr: {idone}/{len(need_incr)} | {elapsed:.0f}s elapsed")
+                rate = done / elapsed
+                eta  = (len(need_full) - done) / rate if rate > 0 else 0
+                log.info(f"  Cache: {done}/{len(need_full)} | "
+                         f"{elapsed:.0f}s elapsed | ETA {eta:.0f}s")
             try:
                 fut.result()
             except Exception:
                 pass
 
-    log.info(f"Cache warm-up done: {time.time()-t0:.1f}s")
+        log.info(f"Cache warm-up done: {time.time()-t0:.1f}s")
 
     # ── Gap 2: Build RS universe from ALL cached stocks (not just those refreshed) ──
     log.info("Building RS universe for cross-sectional ranking …")
@@ -1087,10 +886,6 @@ def _normalize_df_index(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def dl(sym, interval="1d", period=PERIOD_DAILY):
-    # Quick check: skip stocks that have failed multiple times
-    if _should_skip_stock(sym):
-        return None
-    
     for attempt in range(DL_RETRIES):
         _yf_wait_cooldown()
         try:
@@ -1118,18 +913,14 @@ def dl(sym, interval="1d", period=PERIOD_DAILY):
             is_iso   = "unconverted data remains" in msg or ("T0" in msg and "+" in msg)
 
             if is_rate_limit:
-                wait = _jittered_backoff(attempt, base=3.0, cap=15.0)  # reduced from base=15 cap=60
+                wait = _jittered_backoff(attempt, base=20.0, cap=180.0)
                 _yf_trigger_cooldown(wait)
                 log.warning(f"RateLimit dl {sym} attempt {attempt+1} — cooldown {wait:.0f}s")
                 time.sleep(wait)
             elif is_crumb:
-                if attempt == 0:
-                    log.warning(f"401 dl {sym} — resetting session, one retry")
-                    _reset_session()
-                    time.sleep(2)
-                else:
-                    log.warning(f"401 dl {sym} — symbol unavailable on Yahoo, skipping")
-                    return None   # bail fast, don't block the pool
+                log.warning(f"401/Crumb dl {sym} attempt {attempt+1} — reset session")
+                _reset_session()
+                time.sleep(_jittered_backoff(attempt, base=8.0))
             elif is_iso:
                 log.debug(f"ISO timestamp dl {sym} attempt {attempt+1} — retry")
                 _reset_session()
@@ -1138,8 +929,6 @@ def dl(sym, interval="1d", period=PERIOD_DAILY):
                 return None
             elif attempt < DL_RETRIES - 1:
                 time.sleep(_jittered_backoff(attempt, base=DL_BACKOFF))
-    # All retries exhausted — mark stock for skipping on future attempts
-    _mark_stock_skip(sym)
     return None
 
 def dl_fund(sym):
@@ -1153,10 +942,6 @@ def dl_fund(sym):
       in main() via get_bulk_deals_today() and passed into scan_stock().
       Calling it here would trigger one NSE API call per stock (×2100 = 2100 calls).
     """
-    # Quick check: skip stocks that have failed multiple times
-    if _should_skip_stock(sym):
-        return {"_fund_ok": False}
-    
     for attempt in range(DL_RETRIES):
         _yf_wait_cooldown()
         try:
@@ -1165,42 +950,36 @@ def dl_fund(sym):
                 kw = {"session": sess} if sess is not None else {}
                 tk = yf.Ticker(sym, **kw)
                 info = tk.info or {}
-                # Fix 3: calendar is a 2nd HTTP call — keep inside semaphore
-                # so it is throttled like .info and never fires uncontrolled.
-                try:
-                    cal = tk.calendar
-                    ne = cal.get("Earnings Date", [None])[0] if cal else None
-                except Exception:
-                    ne = None
             if not info.get("marketCap"):
                 if attempt < DL_RETRIES - 1:
                     time.sleep(3)
                     continue
                 return {"_fund_ok": False}
+            try:
+                cal = tk.calendar
+                ne = cal.get("Earnings Date", [None])[0] if cal else None
+            except Exception:
+                ne = None
             fund = {
                 "_fund_ok": True,
                 "marketCap": info.get("marketCap"),
                 "earningsQuarterlyGrowth": info.get("earningsQuarterlyGrowth"),
                 "earningsGrowth": info.get("earningsGrowth"),
                 "heldPercentInstitutions": info.get("heldPercentInstitutions"),
-                # CRITICAL-2: Revenue growth — distinguishes real vs cost-cut EPS growth
-                "revenueGrowth": info.get("revenueGrowth"),
-                # HIGH-2: Float shares — small float = explosive potential (S-1)
-                "floatShares": info.get("floatShares"),
                 "sector": info.get("sector"),
                 "longName": info.get("longName") or info.get("shortName"),
                 "next_earnings": str(ne) if ne else None,
                 "piotroski_score"  : None,
-                "scr_pledging_pct" : None,   # HIGH-3: None not 0.0
-                "scr_promoter_pct" : None,
+                "scr_pledging_pct" : 0.0,
+                "scr_promoter_pct" : 0.0,
             }
             try:
                 from fundamentals import get_piotroski_score, get_promoter_data, enrich_fund_with_screener
                 pio         = get_piotroski_score(sym)
                 pledge_data = get_promoter_data(sym)
                 fund["piotroski_score"]   = pio
-                fund["scr_pledging_pct"]  = pledge_data.get("pledge_pct")   # None if unavailable
-                fund["scr_promoter_pct"]  = pledge_data.get("promoter_pct")
+                fund["scr_pledging_pct"]  = pledge_data.get("pledge_pct", 0.0)
+                fund["scr_promoter_pct"]  = pledge_data.get("promoter_pct", 0.0)
                 # DS5 FIX: overwrite yfinance quarterly/annual growth with screener.in
                 # which uses Indian fiscal quarters and BSE-filed data (more accurate for NSE).
                 fund = enrich_fund_with_screener(sym, fund)
@@ -1210,29 +989,8 @@ def dl_fund(sym):
                 log.debug(f"Fund enrichment {sym}: {_fe}")
             return fund
         except Exception as e:
-            msg   = str(e)
+            msg = str(e)
             etype = type(e).__name__
-
-            # ── 401 Unauthorized ──────────────────────────────────────────
-            # Yahoo returns 401 for two distinct reasons:
-            #   a) Stale crumb/cookie — one session reset + short wait can fix it
-            #   b) Symbol not on Yahoo Finance (obscure micro-caps) — permanent
-            # We allow ONE crumb-reset retry; if the second attempt also 401s we
-            # bail immediately instead of burning 6 × backoff cycles (~10 min).
-            # This prevents a single bad symbol from blocking the serialised pool.
-            if "401" in msg or "Unauthorized" in msg or "Crumb" in msg:
-                if attempt == 0:
-                    log.warning(f"401 fund {sym} — resetting session, one retry")
-                    _reset_session()
-                    time.sleep(2)   # short wait for new crumb
-                    continue
-                else:
-                    log.warning(f"401 fund {sym} — symbol unavailable on Yahoo, skipping")
-                    return {"_fund_ok": False}   # give up immediately, don't block pool
-
-            # ── 429 Rate Limit ────────────────────────────────────────────
-            # Cap cooldown at 60s (was 240s). With serialised calls + 0.4s pacing
-            # we rarely hit true rate limits; when we do, 60s is enough recovery.
             is_rate_limit = (
                 "YFRateLimitError" in etype or
                 "429" in msg or
@@ -1241,14 +999,16 @@ def dl_fund(sym):
                 "try after" in msg.lower()
             )
             if is_rate_limit:
-                wait = _jittered_backoff(attempt, base=3.0, cap=15.0)  # reduced from base=15 cap=60
+                wait = _jittered_backoff(attempt, base=25.0, cap=240.0)
                 _yf_trigger_cooldown(wait)
                 log.warning(f"RateLimit fund {sym} attempt {attempt+1} — cooldown {wait:.0f}s")
                 time.sleep(wait)
+            elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
+                log.warning(f"401/Crumb fund {sym} attempt {attempt+1} — reset session")
+                _reset_session()
+                time.sleep(_jittered_backoff(attempt, base=8.0))
             elif attempt < DL_RETRIES - 1:
                 time.sleep(_jittered_backoff(attempt, base=DL_BACKOFF))
-    # All retries exhausted — mark stock for skipping on future attempts
-    _mark_stock_skip(sym)
     return {"_fund_ok": False}
 
 def cap_class(mc):
@@ -1613,75 +1373,39 @@ def canslim_score(close, vol, fund, nc, nr):
         if nc[-1] > np.mean(nc[-200:]): score += 1
     if vol is not None and idx >= 20:
         checks += 1
+        # FIX: raise to ₹15 Cr/day (was ₹1 Cr — too loose, allowed illiquid stocks)
         if np.mean(vol[idx-19:idx+1])*np.mean(close[idx-19:idx+1])/1e7 >= MIN_LIQUIDITY_CR: score += 1
-
-    # ── C-1: Latest quarter EPS growth ≥ 25% ────────────────────────────────
-    eq = fund.get("earningsQuarterlyGrowth")
-    if eq is not None:
-        checks += 1
-        if eq >= CS["C_min"]: score += 1
-
-    # ── C-2: EPS ACCELERATION (most important C signal) ─────────────────────
-    # Q1_yoy > Q2_yoy > 0 = compounding at increasing rate
-    q1y = fund.get("eps_q1_yoy")
-    q2y = fund.get("eps_q2_yoy")
-    if q1y is not None and q2y is not None:
-        checks += 1
-        if q1y > q2y > 0:
-            score += 1   # full credit for acceleration
-        elif q1y > 0 and q2y > 0:
-            score += 0   # both positive but not accelerating — no bonus
-    elif fund.get("eps_accelerating") == 1:
-        checks += 1
-        score += 1
-
-    # ── C-3: Revenue growth ≥ 20% (NSE-adjusted; US threshold = 25%) ────────
-    # Check rev_q1_yoy first (quarterly), then sales_growth_ttm, then revenueGrowth
-    rev_growth = fund.get("rev_q1_yoy")
-    if rev_growth is None:
-        stm = fund.get("sales_growth_ttm")
-        if stm is not None:
-            rev_growth = stm  # already in %
-    if rev_growth is None:
-        rg = fund.get("revenueGrowth")
-        if rg is not None:
-            rev_growth = rg * 100  # convert decimal to %
-    if rev_growth is not None:
-        checks += 1
-        if rev_growth >= 20: score += 1   # 20% floor for NSE (vs US 25%)
-
-    # ── A-1: Annual EPS growth ≥ 25% (TTM) ──────────────────────────────────
-    eg = fund.get("earningsGrowth")
-    if eg is not None:
-        checks += 1
-        if eg >= CS["A_min"]: score += 1
-
-    # ── A-1b: 3-year profit CAGR ≥ 18% (NSE-adjusted; US threshold = 25%) ──
-    # screener.in provides profit_growth_3yr in %
-    pg3 = fund.get("profit_growth_3yr")
-    if pg3 is not None:
-        checks += 1
-        if pg3 >= 18: score += 1   # 18% 3yr CAGR floor for NSE
-
-    # ── SC2 FIX: CANSLIM 'I' = INCREASING institutional ownership ───────────
+    for key, th in [("earningsQuarterlyGrowth", CS["C_min"]),
+                    ("earningsGrowth", CS["A_min"])]:
+        v = fund.get(key)
+        if v is not None:
+            checks += 1
+            if v >= th: score += 1
+    # SC2 FIX: CANSLIM 'I' = INCREASING institutional ownership, not just threshold.
     # O'Neil: rising inst ownership over prior 2-3 quarters = accumulation signal.
     # Falling inst ownership (distribution) should NOT award a point even above 20%.
+    # We approximate direction by checking heldPercentInstitutions vs a 4-quarter proxy:
+    # yfinance only provides current quarter — we cache prior quarter in fund_cache and
+    # compare. If prior quarter unavailable, fall back to absolute threshold (old behaviour).
     inst_now = fund.get("heldPercentInstitutions")
     if inst_now is not None:
         checks += 1
-        inst_prior = fund.get("heldPercentInstitutions_prior")   # populated by dl_fund_cached (CRITICAL-1 fix)
+        inst_prior = fund.get("heldPercentInstitutions_prior")   # populated by dl_fund if cached
         if inst_prior is not None:
+            # Direction check: reward only if increasing (accumulation)
             if inst_now > inst_prior and inst_now >= CS["I_min_instl"]:
                 score += 1   # rising + above threshold = strong I
             elif inst_now > inst_prior:
-                score += 0   # rising but below threshold = no point
+                score += 0   # rising but below threshold = no point (early stage)
             # falling = distribution = no point regardless of absolute level
         else:
             # Fallback: absolute threshold (old behaviour when prior not cached)
             if inst_now >= CS["I_min_instl"]:
                 score += 1
 
-    # ── DS5: screener.in quality checks — ROE, ROCE, D/E ────────────────────
+    # DS5 FIX: screener.in quality checks — ROE, ROCE, D/E
+    # Now populated via enrich_fund_with_screener() in dl_fund().
+    # Adds 0-3 extra checks to completeness without replacing CANSLIM letters.
     roe = fund.get("roe")
     if roe is not None:
         checks += 1
@@ -2768,137 +2492,8 @@ def det_darvas(c, v, h=None):
 
 
 # ================================================================
-# NEW DETECTORS — Phase 1 Institutional Upgrade
+# PATTERN FORMATION METADATA + TARGET ETA
 # ================================================================
-
-def det_3wt(c, v, weekly_c=None, weekly_v=None):
-    """
-    Three Weeks Tight (3WT) — O'Neil's strongest CONTINUATION pattern.
-    3 consecutive weekly closes within 1.5% of each other = institutions
-    holding firm, absorbing all supply. After 3WT, first strong-vol up week = entry.
-
-    Uses weekly_c if provided (pre-computed weekly close array), else
-    synthesises weekly closes from daily data (approximate).
-    """
-    # Prefer pre-supplied weekly data; fall back to approximating from daily
-    if weekly_c is not None and len(weekly_c) >= 5:
-        wc = np.array(weekly_c, dtype=float)
-        wv = np.array(weekly_v, dtype=float) if weekly_v is not None else None
-    else:
-        # Synthesise weekly closes from daily: group by 5-bar windows
-        n_daily = len(c)
-        if n_daily < 30:
-            return None
-        # Take last 8 weekly windows
-        weekly_closes = []
-        weekly_vols   = []
-        i = n_daily - 1
-        while i >= 0 and len(weekly_closes) < 8:
-            end = i + 1
-            start = max(0, end - 5)
-            weekly_closes.insert(0, float(c[end - 1]))
-            weekly_vols.insert(0, float(np.sum(v[start:end])) if len(v) >= end else 0.0)
-            i -= 5
-        if len(weekly_closes) < 5:
-            return None
-        wc = np.array(weekly_closes, dtype=float)
-        wv = np.array(weekly_vols,   dtype=float)
-
-    n = len(wc)
-    if n < 5:
-        return None
-
-    w1, w2, w3 = float(wc[-3]), float(wc[-2]), float(wc[-1])
-    hi3 = max(w1, w2, w3)
-    lo3 = min(w1, w2, w3)
-    if hi3 <= 0:
-        return None
-    range_pct = (hi3 - lo3) / hi3
-
-    if range_pct > 0.015:  # 1.5% max range — strict O'Neil definition
-        return None
-
-    # Must be in uptrend: above 10-week MA (use available history)
-    lb = min(10, n)
-    ma10w = float(np.mean(wc[-lb:]))
-    if w3 < ma10w * 0.98:
-        return None
-
-    # Must be above prior significant trend (not forming in a downtrend)
-    if n >= 14 and wc[-1] < wc[-14]:
-        return None   # stock lower than 14 weeks ago = base in downtrend
-
-    # Volume contracting in tight weeks = stealth accumulation
-    vol_ok = True
-    if wv is not None and n >= 5:
-        avg_wvol   = float(np.mean(wv[-6:-3])) if n >= 6 else float(np.mean(wv[:-3]))
-        tight_wvol = float(np.mean(wv[-3:]))
-        vol_ok = (tight_wvol < avg_wvol * 0.90) if avg_wvol > 0 else True
-
-    pivot   = float(hi3)
-    vs      = vsurge(v, len(v)) if len(v) > 0 else None
-    quality = round((1 - range_pct / 0.015) * (1.1 if vol_ok else 0.85), 3)
-    quality = min(quality, 0.99)
-
-    return dict(
-        pattern="ThreeWeeksTight", status="Tight Setup",
-        quality=quality, bz=round(pivot, 2),
-        bottom=round(lo3, 2), last=round(w3, 2),
-        vs=vs,
-        m1=round(range_pct * 100, 3),   # range % (lower = tighter)
-        m2=1 if vol_ok else 0,          # vol contraction flag
-        m3=None, m4=None, m5=None,
-        _start_bar=0, _end_bar=2,
-    )
-
-
-def det_new52wk_high(c, v):
-    """
-    O'Neil's 52-Week New High Scanner.
-    Stock at (or within 0.5% below) 52-week high, emerging from a base
-    (not extended — was below recent high for at least 15 sessions).
-    Not overextended above 200d MA (< 50% extension).
-    """
-    n = len(c)
-    if n < 252:
-        return None
-
-    hi_52w = float(np.max(c[-252:]))
-    if hi_52w <= 0:
-        return None
-
-    # Must be at or very near 52-week high
-    if c[-1] < hi_52w * 0.995:
-        return None
-
-    # Not already extended: price < 50% above 200d MA
-    if n >= 200:
-        ma200 = float(np.mean(c[-200:]))
-        if ma200 > 0 and c[-1] > ma200 * 1.50:
-            return None   # too extended
-
-    # Came from a base: must have been below recent high for at least 15 sessions
-    # (i.e., c[-15:-1] all below today's new high — this confirms it's a fresh breakout)
-    if np.any(c[-15:-1] >= c[-1] * 0.998):
-        return None   # was already near this high recently — not a fresh breakout
-
-    vs      = vsurge(v, n)
-    ma20    = float(np.mean(c[-20:])) if n >= 20 else c[-1]
-    quality = round(max(0, (c[-1] / ma20 - 1)), 3) if ma20 > 0 else 0.01
-    quality = min(quality, 0.5)
-
-    return dict(
-        pattern="New52WkHigh", status="New High Breakout",
-        quality=quality, bz=round(float(hi_52w), 2),
-        bottom=round(float(np.min(c[-20:])), 2), last=round(float(c[-1]), 2),
-        vs=vs,
-        m1=round(float(c[-1] / hi_52w - 1) * 100, 2),   # % from 52wk high (≈0)
-        m2=None, m3=None, m4=None, m5=None,
-        _start_bar=n - 20, _end_bar=n - 1,
-    )
-
-
-
 
 # Research-backed T1/T2/T3 ETA in trading days (Bulkowski + Bonde)
 # Format: (t1_days, t2_days, t3_days)
@@ -2918,10 +2513,8 @@ _PATTERN_ETA = {
     "Anticipation":   (8,  20, 35),   # 1-3w T1, 3-6w T2
     "Stage2Breakout": (20, 60, 120),  # 3-6w T1, 8-20w T2
     "DarvasBox":      (10, 25, 55),   # PD6: Darvas — 2w T1, 4-6w T2
-    # New institutional patterns
-    "ThreeWeeksTight": (7, 18, 40),   # O'Neil continuation — 1-2w T1, 3-6w T2
-    "New52WkHigh":     (8, 20, 45),   # Breakout from fresh 52wk high
 }
+
 # ── GAP-D3 FIX: NSE Holiday Calendar 2025-2026 ──────────────────────────────
 # Source: NSE official holiday list (published annually on nseindia.com)
 # Add new year's list here each December. Only equity segment holidays included.
@@ -3119,10 +2712,10 @@ DETECTORS = {
     "Anticipation":  (det_anticipation, [30,50]),
     "Stage2Breakout":(det_stage2bo,     [180]),
     "DarvasBox":     (det_darvas,        [60,80,120,180,252]),   # PD6: Darvas Box
-    # ── New institutional-grade patterns ──
-    "ThreeWeeksTight": (det_3wt,        [60, 80, 120]),   # O'Neil continuation
-    "New52WkHigh":     (det_new52wk_high, [252]),          # 52-week high scanner
 }
+
+# ================================================================
+# SCAN ONE STOCK
 
 # ================================================================
 # SCAN ONE STOCK
@@ -3247,15 +2840,11 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
         _is_gsm = sym_clean_gsm in market_ctx["gsm_stocks"]
 
     # ── SC5: Sector trend ─────────────────────────────────────────────────────
-    # O'Neil 'L': leader in a leading sector. Use RRG quadrant analysis (HIGH-4 fix).
+    # O'Neil 'L': leader in a leading sector. Use cached sector index trend.
     _sector_stage = "Unknown"
     try:
         from market_data import get_sector_trend_for_stock
-        # Pass Nifty close array so RRG can compute without data_updater dependency
-        _nifty_close_for_rrg = nc.tolist() if nc is not None and len(nc) > 0 else None
-        _sector_stage = get_sector_trend_for_stock(
-            fund.get("sector") or "", nifty_close=_nifty_close_for_rrg
-        )
+        _sector_stage = get_sector_trend_for_stock(fund.get("sector") or "")
     except Exception:
         pass
 
@@ -3366,7 +2955,7 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
             vol_dryup=1 if vdu else 0, stage=stage, recommendation=rec,
             ti65=ti65_val, lynch_score_val=lynch_val,
             piotroski_score=_piotroski,          # GAP-F3
-            pledge_pct=_pledge_pct if _pledge_pct is not None else None,  # GAP-F1 HIGH-3
+            pledge_pct=_pledge_pct if _pledge_pct else None,  # GAP-F1
             bulk_deal_cr=_bulk_deal_cr,          # GAP-F2
             pos_size_1pct=pos_size_1pct,         # RM1
             delivery_pct=_deliv_pct,             # DS3: Bhavcopy delivery %
@@ -3376,18 +2965,6 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
             roce=fund.get("roce"),               # DS5: screener ROCE %
             debt_equity=fund.get("debt_equity"), # DS5: screener D/E
             quarterly_eps_pct=fund.get("quarterly_eps_growth"),  # DS5: QoQ EPS growth
-            # CRITICAL-2 / C-2 / C-3 NEW FIELDS
-            revenueGrowth=fund.get("revenueGrowth"),         # yfinance revenue growth (decimal)
-            sales_growth_ttm=fund.get("sales_growth_ttm"),   # screener TTM sales growth %
-            rev_q1_yoy=fund.get("rev_q1_yoy"),               # quarterly revenue YoY %
-            eps_q1_yoy=fund.get("eps_q1_yoy"),               # Q1 EPS YoY %
-            eps_q2_yoy=fund.get("eps_q2_yoy"),               # Q2 EPS YoY %
-            eps_accelerating=fund.get("eps_accelerating"),   # 1 = Q1>Q2>0
-            profit_growth_3yr=fund.get("profit_growth_3yr"), # A-1: 3yr CAGR %
-            # HIGH-2: Float shares
-            floatShares=fund.get("floatShares"),              # raw float shares
-            float_shares_cr=round(float(fund["floatShares"]) / 1e7, 2) if fund.get("floatShares") else None,
-            scr_promoter_pct=fund.get("scr_promoter_pct"),   # promoter holding %
             m1=best.get("m1"), m2=best.get("m2"), m3=best.get("m3"),
             m4=best.get("m4"), m5=best.get("m5"), notes=notes or None))
 
@@ -3565,7 +3142,7 @@ def _save_csvs(buys: pd.DataFrame, watches: pd.DataFrame,
     return buy_path, watch_path
 
 def fmt_daily(df, market_trend, ftd, regime_info=None, fii_dii_ctx=None,
-              concentration_warning="", fii_persistence="Unknown"):
+              concentration_warning=""):
     _ist_hm = _ist("%H:%M")
     buys  = df[df["tier"].str.contains("BUY", na=False)]
     watch = df[df["tier"].str.contains("WATCH", na=False)]
@@ -3575,20 +3152,17 @@ def fmt_daily(df, market_trend, ftd, regime_info=None, fii_dii_ctx=None,
     # This is the first thing an institution-aware trader checks before individual signals.
     fii_str = ""
     if fii_dii_ctx:
-        fn   = fii_dii_ctx.get("fii_net_cr")
-        dn   = fii_dii_ctx.get("dii_net_cr")
+        fn  = fii_dii_ctx.get("fii_net_cr")
+        dn  = fii_dii_ctx.get("dii_net_cr")
         sent = fii_dii_ctx.get("fii_dii_sentiment", "")
         if fn is not None:
             fn_sign = "+" if fn >= 0 else ""
             dn_sign = "+" if (dn or 0) >= 0 else ""
             sent_em = {"BULLISH":"🟢","MILDLY_BULLISH":"🟡","NEUTRAL":"⚪",
                        "MIXED":"🟡","BEARISH":"🔴"}.get(sent, "⚪")
-            persist_em = {"Buying":"📈","Selling":"📉","Mixed":"↔","Unknown":""}.get(fii_persistence, "")
             fii_str = (
                 f"{sent_em} FII: {fn_sign}₹{fn:.0f}Cr | "
-                f"DII: {dn_sign}₹{dn:.0f}Cr — {sent}"
-                + (f" | 3d: {persist_em}{fii_persistence}" if fii_persistence != "Unknown" else "")
-                + "\n"
+                f"DII: {dn_sign}₹{dn:.0f}Cr — {sent}\n"
             )
 
     lines = [
@@ -3942,7 +3516,7 @@ def healthcheck():
     ok = True
     print("[1] yfinance...     ", end="")
     df = dl("RELIANCE.NS", "1d", "1mo")
-    print(f"OK ({len(df)} bars)" if df is not None and not df.empty else "FAIL"); ok = ok and (df is not None and not df.empty)
+    print(f"OK ({len(df)} bars)" if df else "FAIL"); ok = ok and bool(df)
     print("[2] Fundamentals... ", end="")
     f = dl_fund("RELIANCE.NS")
     print(f"OK mcap={f.get('marketCap')}" if f.get("marketCap") else "WARN — no mcap")
@@ -4712,16 +4286,13 @@ def main():
     # DS3+DS4+MM3 FIX: Fetch Bhavcopy, FII/DII, GSM once before scan loop.
     # market_ctx passed to every scan_stock call — no per-stock API calls.
     market_ctx = {}
-    fii_persistence = "Unknown"
     try:
-        from market_data import get_market_context, get_fii_flow_persistence
+        from market_data import get_market_context
         market_ctx = get_market_context()
-        fii_persistence = get_fii_flow_persistence(days=3)
         log.info(
             f"Market context: FII ₹{market_ctx.get('fii_net_cr','?')}Cr | "
             f"DII ₹{market_ctx.get('dii_net_cr','?')}Cr | "
             f"Sentiment: {market_ctx.get('fii_dii_sentiment','?')} | "
-            f"FII 3d: {fii_persistence} | "
             f"Bhavcopy: {len(market_ctx.get('bhavcopy',{}))} | "
             f"GSM: {len(market_ctx.get('gsm_stocks',set()))}"
         )
@@ -4899,15 +4470,10 @@ def main():
             score += 0.4
 
         # ── 14. Promoter pledge quality (0.3 pt, -0.5 penalty) — GAP-F1 ──
-        # HIGH-3 FIX: pledge_pct is None when data unavailable — don't treat as 0%
-        pledge   = r.get("pledge_pct")       # None = unknown; 0.0 = confirmed clean
-        promoter = r.get("scr_promoter_pct") # None = unknown
-        if pledge is None:
-            pass   # unknown — neither reward nor penalise
-        elif pledge < 5 and (promoter is not None and promoter > 50):
-            score += 0.3    # confirmed: low pledge + high promoter confidence
-        elif pledge < 5:
-            score += 0.15   # low pledge but promoter % unknown
+        pledge = r.get("pledge_pct") or 0
+        promoter = r.get("scr_promoter_pct") or 0   # will be None until fund wired fully
+        if pledge < 5 and promoter > 50:
+            score += 0.3    # low pledge + high promoter confidence
         elif pledge > 20:
             score -= 0.5    # dangerous pledging level
         elif pledge > 10:
@@ -4927,9 +4493,9 @@ def main():
         # O'Neil 'L': leaders come from leading sectors.
         # sector_stage populated by market_data.get_sector_trend_for_stock()
         sec_stage = str(r.get("sector_stage") or "Unknown")
-        if sec_stage in ("Stage2", "Leading"):   score += 0.4   # leading sector
-        elif sec_stage in ("Uptrend", "Improving"): score += 0.2
-        elif sec_stage in ("Stage4", "Lagging"):    score -= 0.2
+        if sec_stage == "Stage2":   score += 0.4   # leading sector — strong confirmation
+        elif sec_stage == "Uptrend": score += 0.2   # uptrend but not Stage2
+        elif sec_stage == "Stage4": score -= 0.2    # declining sector — avoid breakouts
 
         # ── 17. Delivery % — institutional confirmation (0.4 pt) — DS3 ────
         # Bhavcopy delivery % > 60% = institutions routing delivery trades.
@@ -4945,73 +4511,6 @@ def main():
         # unreliable or unexecutable. Hard penalty — rarely recovers to BUY tier.
         if r.get("is_gsm"):
             score -= 2.0
-
-        # ── 19. SEPA Trend Template — Minervini's 8-condition filter (0.5 pt) ──
-        # All 8 conditions = institutional-grade uptrend structure.
-        # Computed from pre-cached price data stored in the row (cmp + MAs via notes or fund).
-        # We use approximations available in the row (cmp, dist_52wk_pct, stage, ti65).
-        sepa_pass = 0
-        cmp = r.get("cmp") or 0
-        dist_52wk = r.get("dist_52wk_pct")   # % below 52wk high (0 = at high)
-        # Condition 7: at least 25% above 52-week low (dist_52wk_pct is % from HIGH;
-        # approximate: if dist from 52wk high < 25%, likely 25%+ above 52wk low)
-        if dist_52wk is not None and dist_52wk < 25:
-            sepa_pass += 1   # C7
-        # Condition 8: within 25% of 52-week high
-        if dist_52wk is not None and dist_52wk <= 25:
-            sepa_pass += 1   # C8
-        # Conditions 1-6 approximated via Weinstein Stage + TI65 + RS
-        if "Stage2" in str(r.get("stage") or ""):
-            sepa_pass += 3   # Stage2 implies C1 (above 200d MA), C2 (200d rising), C3 (150d>200d)
-        ti_val = r.get("ti65") or 0
-        if ti_val >= 1.05:
-            sepa_pass += 2   # implies C4 (above 150d), C5 (above 50d)
-        rs_val = r.get("rs_percentile") or 0
-        if rs_val >= 70:
-            sepa_pass += 1   # C6: 50d > 150d & 200d (RS leader likely satisfies this)
-        if sepa_pass >= 7:   score += 0.5
-        elif sepa_pass >= 5: score += 0.25
-        elif sepa_pass <= 2: score -= 0.15   # poor trend structure
-
-        # ── 20. Float size bonus (0.3 pt) — S-1 ────────────────────────────
-        # Small float = explosive move potential on institutional buying
-        float_cr = r.get("float_shares_cr")
-        if float_cr is None:
-            fs_raw = r.get("floatShares")
-            if fs_raw:
-                float_cr = float(fs_raw) / 1e7   # convert shares → crores
-        if float_cr is not None:
-            if float_cr < 5:        score += 0.40   # tiny float (< 5 Cr shares) — very explosive
-            elif float_cr < 15:     score += 0.20   # small float
-            elif float_cr > 200:    score -= 0.10   # massive float — needs huge buying pressure
-
-        # ── 21. Revenue growth confirmation (0.4 pt) — C-3 ─────────────────
-        # Real EPS growth must be accompanied by revenue growth.
-        # Without it, EPS may be cost-cutting or buyback driven (unsustainable).
-        rev_pct = r.get("rev_q1_yoy")
-        if rev_pct is None:
-            stm = r.get("sales_growth_ttm")
-            if stm is not None:
-                rev_pct = stm
-        if rev_pct is None:
-            rg = r.get("revenueGrowth")
-            if rg is not None:
-                rev_pct = rg * 100
-        if rev_pct is not None:
-            if rev_pct >= 25:   score += 0.4   # strong revenue growth — real business growth
-            elif rev_pct >= 15: score += 0.2   # moderate growth — acceptable
-            elif rev_pct < 0:   score -= 0.2   # shrinking revenue = red flag
-
-        # ── 22. Volume persistence (0.3 pt) — multi-day confirmation ────────
-        # O'Neil: best breakouts show 3+ days of above-avg volume, not just one.
-        # Approximate: vol_surge in row is breakout day. Check if vol_dryup was False recently.
-        # We score breakout day VS × persistence signal from notes.
-        vs_val = r.get("vol_surge") or 0
-        if vs_val >= 1.5 and not r.get("vol_dryup"):   # high-vol breakout, not yet dry
-            score += 0.15   # partial credit — full persistence check needs price history
-        # ThreeWeeksTight bonus: vol dry-up confirmed, then breakout = highest conviction
-        if str(r.get("pattern") or "") == "ThreeWeeksTight":
-            score += 0.15   # structural tight + dry-up = extra conviction
 
         return round(min(score, 10.0), 2)
 
@@ -5132,8 +4631,7 @@ def main():
 
         send_telegram(fmt_daily(df, market_trend, ftd_active, regime_info=regime_info,
                                 fii_dii_ctx=market_ctx if market_ctx else None,
-                                concentration_warning=_sector_conc_msg,
-                                fii_persistence=fii_persistence))
+                                concentration_warning=_sector_conc_msg))
         # Send BUY csv (primary — Telegram delivers first)
         buy_cap = (f"📈 NSE {scan_label} {_today()} {_cap_time} | "
                    f"BUY: {len(buys)} | Market: {market_trend}")
