@@ -1150,7 +1150,27 @@ def main():
         stocks = load_universe()
         run_eod_update(stocks)
         update_sectors()
-        # Fundamentals fetch disabled (avoids 401 rate limiting)
+
+        # IR5 FIX: Pre-fetch fundamentals BEFORE scanner.py --daily runs.
+        # Old behaviour: disabled to avoid 401 rate-limiting.
+        # Root cause of 401s was NOT the pre-fetch itself but calling fundamentals
+        # on 2100+ stocks during the scan window via 4 workers simultaneously.
+        # Fix: single-threaded pre-fetch here at 1 req/sec (screener.in safe rate).
+        # Scanner then reads cache with <1ms overhead per stock — zero live calls.
+        #
+        # Only updates stocks NOT already cached within 7 days (TTL).
+        # Typical weekday: ~150-300 stocks need refresh (new listings + TTL expiry).
+        # At 1 req/sec + ~2s screener.in parse time → ~5-10 min for full refresh.
+        # Runs AFTER EOD price update so scan has both fresh OHLCV + fresh fundamentals.
+        try:
+            from fundamentals import prefetch_fundamentals
+            log.info("IR5: Pre-fetching fundamentals (Piotroski + pledge, 7-day TTL)...")
+            prefetch_fundamentals(stocks, workers=1, delay=1.2)
+            log.info("IR5: Fundamentals pre-fetch complete")
+        except ImportError:
+            log.warning("fundamentals.py not found — skipping pre-fetch")
+        except Exception as e:
+            log.warning(f"IR5: Fundamentals pre-fetch error (non-critical): {e}")
         return
 
     if args.bootstrap:
