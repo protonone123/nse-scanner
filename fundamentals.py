@@ -753,3 +753,281 @@ if __name__ == "__main__":
         with open(args.prefetch) as f:
             stocks = [line.strip() for line in f if line.strip()]
         prefetch_fundamentals(stocks)
+
+
+# ================================================================
+# SCREENER.IN FUNDAMENTALS — DS5
+# Primary source for Indian-specific financial data that yfinance
+# either misses, mislabels, or sources with 3-6 month lag.
+#
+# Fields available free on screener.in (no login required for basic):
+#   - Sales growth (TTM, 3yr, 5yr, 10yr CAGR)
+#   - Profit growth (same horizons)
+#   - ROE, ROCE
+#   - Debt/Equity ratio
+#   - Current ratio
+#   - Dividend yield
+#   - Face value
+#   - P/E, P/B (often more current than yfinance for NSE)
+#   - EPS (TTM)
+#   - Market cap (INR Cr)
+#   - Quarterly earnings growth (from "Quarters" section)
+#
+# TTL: 7 days — financials change quarterly, daily refetch wasteful.
+# Cache key: "screener_fund" in fundamentals_ext table.
+#
+# Replaces yfinance `earningsQuarterlyGrowth` and `earningsGrowth`
+# for CANSLIM 'C' and 'A' checks (DS5 fix).
+# ================================================================
+
+def get_screener_fundamentals(sym: str) -> dict:
+    """
+    Fetch fundamental data from screener.in for an Indian stock.
+
+    DS5 FIX: yfinance earningsQuarterlyGrowth is often None or wrong for NSE stocks
+    because Yahoo maps US fiscal quarters. Screener.in uses Indian fiscal quarters
+    and reports the numbers as filed with BSE/NSE directly.
+
+    Parameters
+    ----------
+    sym : str  — ticker with or without .NS suffix (e.g. "RELIANCE" or "RELIANCE.NS")
+
+    Returns dict with keys:
+      sales_growth_ttm    : float | None   (% — TTM vs prior TTM)
+      profit_growth_ttm   : float | None   (% — TTM net profit growth)
+      profit_growth_3yr   : float | None   (% CAGR)
+      profit_growth_5yr   : float | None   (% CAGR)
+      roe                 : float | None   (% — Return on Equity)
+      roce                : float | None   (% — Return on Capital Employed)
+      debt_equity         : float | None   (ratio)
+      current_ratio       : float | None
+      eps_ttm             : float | None   (₹)
+      pe_ratio            : float | None
+      pb_ratio            : float | None
+      div_yield           : float | None   (%)
+      market_cap_cr       : float | None   (₹ Crore)
+      quarterly_eps_growth: float | None   (% — latest quarter YoY EPS growth)
+      face_value          : float | None
+      _source             : str            ("screener" | "unavailable")
+    """
+    sym_clean = sym.upper().replace(".NS", "").replace(".BO", "").strip()
+    cache_key = "screener_fund"
+    TTL = 7  # days
+
+    cached = _cache_read_ext(sym_clean, cache_key, TTL)
+    if cached is not None:
+        return cached
+
+    result = _scrape_screener(sym_clean)
+    _cache_write_ext(sym_clean, cache_key, result)
+    return result
+
+
+def _scrape_screener(sym: str) -> dict:
+    """
+    Scrape screener.in/company/{sym}/ for key financial ratios.
+    Tries consolidated view first, then standalone.
+
+    screener.in layout (as of 2024-2025):
+      - Top ratios table: Market Cap, Current Price, P/E, Book Value, etc.
+      - "Key Ratios" section: ROE, ROCE, Sales growth, Profit growth
+      - "Quarterly Results" section: revenue and profit per quarter
+    """
+    base = {
+        "sales_growth_ttm": None, "profit_growth_ttm": None,
+        "profit_growth_3yr": None, "profit_growth_5yr": None,
+        "roe": None, "roce": None, "debt_equity": None,
+        "current_ratio": None, "eps_ttm": None, "pe_ratio": None,
+        "pb_ratio": None, "div_yield": None, "market_cap_cr": None,
+        "quarterly_eps_growth": None, "face_value": None,
+        "_source": "unavailable",
+    }
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.screener.in/",
+    }
+
+    urls_to_try = [
+        f"https://www.screener.in/company/{sym}/consolidated/",
+        f"https://www.screener.in/company/{sym}/",
+    ]
+
+    for url in urls_to_try:
+        try:
+            resp = requests.get(url, headers=headers, timeout=20)
+            if resp.status_code == 404:
+                continue
+            if not resp.ok:
+                time.sleep(1.5)
+                continue
+            if "company not found" in resp.text.lower():
+                continue
+
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(resp.text, "html.parser")
+            result = dict(base)  # fresh copy
+
+            def _pct(txt: str) -> float | None:
+                """Parse percent value from text."""
+                try:
+                    return round(float(txt.strip().replace("%", "").replace(",", "")), 2)
+                except Exception:
+                    return None
+
+            def _num(txt: str) -> float | None:
+                """Parse numeric value from text."""
+                try:
+                    t = txt.strip().replace(",", "").replace("₹", "").replace("Cr", "")
+                    return round(float(t), 4)
+                except Exception:
+                    return None
+
+            # ── Top ratios ul#top-ratios ──────────────────────────────────────
+            # screener.in renders these as <li><span class="name">...</span><span class="value">...</span>
+            top_ul = soup.find("ul", id="top-ratios")
+            if top_ul:
+                for li in top_ul.find_all("li"):
+                    name_span = li.find("span", class_="name")
+                    val_span  = li.find("span", class_=["value", "number"])
+                    if not name_span or not val_span:
+                        continue
+                    name = name_span.get_text(strip=True).lower()
+                    val  = val_span.get_text(strip=True)
+                    if "market cap" in name:
+                        result["market_cap_cr"] = _num(val)
+                    elif "p/e" in name and "industry" not in name:
+                        result["pe_ratio"] = _num(val)
+                    elif "book value" in name:
+                        result["pb_ratio"] = _num(val)   # screener shows book value; PE/BV computed below
+                    elif "div yield" in name or "dividend yield" in name:
+                        result["div_yield"] = _pct(val)
+                    elif "eps" in name:
+                        result["eps_ttm"] = _num(val)
+                    elif "face value" in name:
+                        result["face_value"] = _num(val)
+                    elif "debt" in name and "equity" in name:
+                        result["debt_equity"] = _num(val)
+                    elif "current ratio" in name:
+                        result["current_ratio"] = _num(val)
+                    elif "roe" in name:
+                        result["roe"] = _pct(val)
+                    elif "roce" in name:
+                        result["roce"] = _pct(val)
+
+            # ── Key Ratios section ────────────────────────────────────────────
+            # Look for a section or div with class containing "ratios" or id "ratios"
+            for section in soup.find_all(["section", "div"], class_=lambda c: c and "ratio" in c.lower()):
+                rows_in = section.find_all("tr") or section.find_all("li")
+                for row in rows_in:
+                    cells = row.find_all(["td", "th", "span"])
+                    if len(cells) < 2: continue
+                    label = cells[0].get_text(strip=True).lower()
+                    val   = cells[1].get_text(strip=True) if len(cells) > 1 else ""
+                    if "sales growth" in label and "3yr" not in label and "5yr" not in label:
+                        result["sales_growth_ttm"] = _pct(val)
+                    elif "profit growth" in label and "3yr" in label:
+                        result["profit_growth_3yr"] = _pct(val)
+                    elif "profit growth" in label and "5yr" in label:
+                        result["profit_growth_5yr"] = _pct(val)
+                    elif "profit growth" in label and "ttm" not in label.replace("3yr","").replace("5yr",""):
+                        if result["profit_growth_ttm"] is None:
+                            result["profit_growth_ttm"] = _pct(val)
+                    elif "roe" in label and result["roe"] is None:
+                        result["roe"] = _pct(val)
+                    elif "roce" in label and result["roce"] is None:
+                        result["roce"] = _pct(val)
+
+            # ── Quarterly Results — compute YoY EPS growth ───────────────────
+            # Table with id "quarters" or class "data-table" under quarterly section
+            qt = soup.find("table", id="quarters")
+            if qt is None:
+                qt = soup.find("section", id="quarters")
+                if qt:
+                    qt = qt.find("table")
+            if qt:
+                eps_row = None
+                for tr in qt.find_all("tr"):
+                    label = tr.find("td")
+                    if label and "eps" in label.get_text(strip=True).lower():
+                        eps_row = tr
+                        break
+                if eps_row:
+                    tds = [td.get_text(strip=True).replace(",", "") for td in eps_row.find_all("td")[1:]]
+                    # tds = [most_recent, Q-1, Q-2, Q-3, Q-4_ago, ...]
+                    # YoY growth = (tds[0] - tds[4]) / |tds[4]| * 100
+                    try:
+                        if len(tds) >= 5:
+                            curr_eps = float(tds[0])
+                            yoy_eps  = float(tds[4])
+                            if yoy_eps != 0:
+                                result["quarterly_eps_growth"] = round(
+                                    (curr_eps - yoy_eps) / abs(yoy_eps) * 100, 2
+                                )
+                    except Exception:
+                        pass
+
+            result["_source"] = "screener"
+            log.debug(f"Screener {sym}: OK — ROE={result['roe']}% ROCE={result['roce']}% "
+                      f"EPS_growth={result['quarterly_eps_growth']}%")
+            return result
+
+        except Exception as e:
+            log.debug(f"Screener scrape {sym}: {e}")
+            time.sleep(1.0)
+
+    return base
+
+
+def enrich_fund_with_screener(sym: str, fund: dict) -> dict:
+    """
+    DS5: Enrich a yfinance fund dict with screener.in data.
+
+    Overwrites fields where screener.in is more reliable for Indian equities:
+      earningsQuarterlyGrowth → quarterly_eps_growth (YoY, from quarterly table)
+      earningsGrowth          → profit_growth_ttm (Indian fiscal year basis)
+
+    Also adds net-new fields not in yfinance:
+      roe, roce, debt_equity, current_ratio, profit_growth_3yr, profit_growth_5yr,
+      market_cap_cr (INR Cr vs USD in yfinance), quarterly_eps_growth.
+
+    Parameters
+    ----------
+    sym  : ticker (with or without .NS)
+    fund : existing fund dict from dl_fund()
+
+    Returns enriched copy (does not mutate input).
+    """
+    scr = get_screener_fundamentals(sym)
+    if scr.get("_source") == "unavailable":
+        return fund  # no enrichment possible — return as-is
+
+    enriched = dict(fund)
+
+    # Overwrite yfinance quarterly growth with screener.in quarterly EPS growth (DS5)
+    if scr.get("quarterly_eps_growth") is not None:
+        # Convert from % to decimal to match yfinance's earningsQuarterlyGrowth scale (0.25 = 25%)
+        enriched["earningsQuarterlyGrowth"] = scr["quarterly_eps_growth"] / 100.0
+        enriched["earningsQuarterlyGrowth_screener"] = scr["quarterly_eps_growth"]  # raw % for display
+
+    # Overwrite annual earnings growth
+    if scr.get("profit_growth_ttm") is not None:
+        enriched["earningsGrowth"] = scr["profit_growth_ttm"] / 100.0
+        enriched["earningsGrowth_screener"] = scr["profit_growth_ttm"]
+
+    # Add net-new fields
+    for field in ("roe", "roce", "debt_equity", "current_ratio", "eps_ttm",
+                  "pe_ratio", "div_yield", "market_cap_cr", "face_value",
+                  "profit_growth_3yr", "profit_growth_5yr", "quarterly_eps_growth",
+                  "sales_growth_ttm"):
+        if scr.get(field) is not None:
+            enriched[field] = scr[field]
+
+    # Use screener.in market cap (INR Cr) to cross-check yfinance USD market cap
+    if scr.get("market_cap_cr") and not enriched.get("market_cap_cr"):
+        enriched["market_cap_cr"] = scr["market_cap_cr"]
+
+    enriched["_screener_ok"] = True
+    return enriched
