@@ -317,8 +317,33 @@ def get_db():
         CREATE INDEX IF NOT EXISTS idx_sig_date ON signals(scan_date);
         CREATE INDEX IF NOT EXISTS idx_sig_stock ON signals(stock);
         CREATE INDEX IF NOT EXISTS idx_alerts ON alerts_sent(scan_date,stock);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_sig_dedup ON signals(stock, pattern, scan_date);
     """)
+    # ── Unique dedup index — created separately so we can fix duplicates first ──
+    # If the DB already has duplicate (stock, pattern, scan_date) rows (from a prior
+    # run before this index existed), CREATE UNIQUE INDEX raises IntegrityError.
+    # We detect that case, purge the duplicates (keeping the latest id), then retry.
+    try:
+        con.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sig_dedup "
+            "ON signals(stock, pattern, scan_date)"
+        )
+        con.commit()
+    except sqlite3.IntegrityError:
+        # Duplicates present — keep only the highest-id row per unique key
+        con.execute("""
+            DELETE FROM signals
+            WHERE id NOT IN (
+                SELECT MAX(id)
+                FROM signals
+                GROUP BY stock, pattern, scan_date
+            )
+        """)
+        con.commit()
+        con.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sig_dedup "
+            "ON signals(stock, pattern, scan_date)"
+        )
+        con.commit()
     # ── Schema migration: add columns that may be missing from older DB ──────
     # SQLite does not support IF NOT EXISTS on ALTER TABLE — use try/except
     _new_cols = [
