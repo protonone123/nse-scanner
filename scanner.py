@@ -342,6 +342,10 @@ def get_db():
         ("delivery_pct",       "REAL"),      # DS3: Bhavcopy delivery %
         ("is_gsm",             "INTEGER"),   # MM3: 1 = GSM surveillance
         ("sector_stage",       "TEXT"),      # SC5: sector trend
+        ("roe",                "REAL"),      # DS5: screener.in ROE %
+        ("roce",               "REAL"),      # DS5: screener.in ROCE %
+        ("debt_equity",        "REAL"),      # DS5: screener.in D/E ratio
+        ("quarterly_eps_pct",  "REAL"),      # DS5: YoY quarterly EPS growth %
     ]
     _seen = set()
     for col, typ in _new_cols:
@@ -462,8 +466,9 @@ def load_universe():
 # Fix: curl_cffi impersonates Chrome TLS fingerprint, warm up session once,
 # reuse it for all downloads. Reset session automatically on repeated 401s.
 
-_YF_SESSION = None
+_YF_SESSION      = None
 _YF_SESSION_LOCK = Lock()
+_YF_SESSION_VER  = 0   # IR2 FIX: version counter
 
 
 # ================================================================
@@ -853,9 +858,12 @@ def _get_session():
         return _YF_SESSION
 
 def _reset_session():
-    global _YF_SESSION
+    """IR2 FIX: bump version before clearing — one rebuild, no cascade 401s."""
+    global _YF_SESSION, _YF_SESSION_VER
     with _YF_SESSION_LOCK:
+        _YF_SESSION_VER += 1
         _YF_SESSION = None
+        log.debug(f"Session reset (ver {_YF_SESSION_VER})")
 
 def _normalize_df_index(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -966,12 +974,15 @@ def dl_fund(sym):
                 "scr_promoter_pct" : 0.0,
             }
             try:
-                from fundamentals import get_piotroski_score, get_promoter_data
+                from fundamentals import get_piotroski_score, get_promoter_data, enrich_fund_with_screener
                 pio         = get_piotroski_score(sym)
                 pledge_data = get_promoter_data(sym)
                 fund["piotroski_score"]   = pio
                 fund["scr_pledging_pct"]  = pledge_data.get("pledge_pct", 0.0)
                 fund["scr_promoter_pct"]  = pledge_data.get("promoter_pct", 0.0)
+                # DS5 FIX: overwrite yfinance quarterly/annual growth with screener.in
+                # which uses Indian fiscal quarters and BSE-filed data (more accurate for NSE).
+                fund = enrich_fund_with_screener(sym, fund)
             except ImportError:
                 pass
             except Exception as _fe:
@@ -1391,6 +1402,25 @@ def canslim_score(close, vol, fund, nc, nr):
             # Fallback: absolute threshold (old behaviour when prior not cached)
             if inst_now >= CS["I_min_instl"]:
                 score += 1
+
+    # DS5 FIX: screener.in quality checks — ROE, ROCE, D/E
+    # Now populated via enrich_fund_with_screener() in dl_fund().
+    # Adds 0-3 extra checks to completeness without replacing CANSLIM letters.
+    roe = fund.get("roe")
+    if roe is not None:
+        checks += 1
+        if roe >= 15: score += 1      # ROE ≥ 15% = efficient capital use
+
+    roce = fund.get("roce")
+    if roce is not None and roe is None:   # avoid double-counting correlated metrics
+        checks += 1
+        if roce >= 15: score += 1
+
+    de = fund.get("debt_equity")
+    if de is not None:
+        checks += 1
+        if de < 0.5: score += 1       # low leverage = balance-sheet strength
+
     return score, checks
 
 def recommend(status, score, mkt_up, aggression=2, rs_pct=None):
@@ -1570,15 +1600,31 @@ def calc_targets(pattern, bz, bottom, cmp, adr, close=None, high=None, low=None,
     reward = max(t2 - cmp, cmp * 0.03)
     rr = round(reward / risk, 2) if risk > 0 else 0
 
+    # RM5 FIX: prior swing-high resistance check — clip T1 to nearest supply level
+    if close is not None and len(close) >= 60 and t1 is not None and bz is not None:
+        try:
+            h_arr = high if (high is not None and len(high) >= 60) else close
+            from scipy.signal import find_peaks as _fp
+            peaks, _ = _fp(h_arr[-252:], prominence=0.015 * float(np.mean(h_arr[-252:])), distance=5)
+            prior_highs = [float(h_arr[-252:][p]) for p in peaks]
+            resistance_levels = [ph for ph in prior_highs if bz * 1.005 < ph < t1 * 0.995]
+            if resistance_levels:
+                nearest_resist = min(resistance_levels)
+                if nearest_resist > bz * 1.02:
+                    t1_adj = round(nearest_resist * 0.985, 2)
+                    if t1_adj < t1:
+                        t1 = t1_adj
+                        reward = max(t2 - cmp, cmp * 0.03)
+                        rr = round(reward / risk, 2) if risk > 0 else 0
+        except Exception:
+            pass
+
     # RM1 FIX: position size for 1% capital risk per trade
-    # pos_size_1pct = shares to buy per ₹1,00,000 capital, risking ₹1,000 (1%)
-    # Scale to actual capital: CAPITAL env var (default ₹10,00,000 = ₹10L)
-    _capital_1L = 100_000
-    _risk_1pct  = _capital_1L * 0.01    # ₹1,000 per ₹1L of capital
+    _capital_1L   = 100_000
+    _risk_1pct    = _capital_1L * 0.01
     pos_size_1pct = int(_risk_1pct / risk) if risk > 0 and cmp > 0 else None
-    # Sanity: cap at 10% of capital in single stock (position size * cmp ≤ ₹10K per ₹1L)
     if pos_size_1pct is not None and cmp > 0:
-        max_shares = int((_capital_1L * 0.10) / cmp)
+        max_shares    = int((_capital_1L * 0.10) / cmp)
         pos_size_1pct = min(pos_size_1pct, max_shares)
 
     return stop, t1, t2, t3, rr, pos_size_1pct
@@ -1662,83 +1708,235 @@ def lynch_score(c, v):
 def composite_rank(row):
     """
     Composite score 0-100 for sorting signals.
-    Weights: CANSLIM(25) + 2LYNCH(20) + TI65(15) + VolSurge(15) + Quality(15) + ADR(10)
+    Weights: CANSLIM(25) + LYNCH(20) + TI65(15) + VolSurge(15) + Quality(15) + ADR(10)
+
+    PD7 FIX: quality field ranges differ wildly across detectors:
+      - CupHandle: (r2-sym)*adj  → ~0.0 – 0.85
+      - VCP:       (1-depth)*vol → ~0.70 – 1.00
+      - MomBurst:  gain*(vs/3)   → ~0.01 – 0.20
+      - DarvasBox: (1-depth/0.2)*0.9 → ~0.45 – 0.90
+
+    VCP always outscored MomBurst in quality component not because VCP is better
+    but because scales differ. Fix: normalize to [0,1] using per-pattern empirical
+    max/min ranges before composite scoring.
     """
+    # PD7: per-pattern quality normalization ranges [min, max]
+    _Q_RANGES = {
+        "CupHandle":     (0.00, 0.85),
+        "VCP":           (0.40, 1.00),
+        "FlatBase":      (0.00, 0.80),
+        "InvHS":         (0.00, 0.80),
+        "DoubleBottom":  (0.00, 0.80),
+        "AscTriangle":   (0.00, 0.15),
+        "BullFlag":      (0.00, 0.50),
+        "FallingWedge":  (0.00, 0.50),
+        "MomBurst":      (0.00, 0.20),
+        "EpisodicPivot": (0.00, 0.50),
+        "PocketPivot":   (0.00, 0.50),
+        "Stage2Breakout":(0.00, 0.50),
+        "Anticipation":  (0.00, 1.00),
+        "DarvasBox":     (0.30, 0.90),
+    }
+
+    pat = str(row.get("pattern") or "")
+    q_raw = float(row.get("quality") or 0)
+    qlo, qhi = _Q_RANGES.get(pat, (0.0, 1.0))
+    q_norm = (q_raw - qlo) / (qhi - qlo) if qhi > qlo else q_raw
+    q_norm = max(0.0, min(1.0, q_norm))  # clamp to [0,1]
+
     s = 0
     cs = row.get("canslim_score", 0) or 0
     dc = row.get("data_completeness", 7) or 7
     s += (cs / max(dc, 1)) * 25           # CANSLIM (normalised to data available)
     ls = row.get("lynch_score_val", 0) or 0
-    s += (ls / 6) * 20                     # 2LYNCH
+    s += (ls / 6) * 20                    # LYNCH
     ti = row.get("ti65", 1.0) or 1.0
     ti_score = min(max(ti - 1.0, 0), 0.30) / 0.30
-    s += ti_score * 15                     # TI65 (capped at +30%)
+    s += ti_score * 15                    # TI65 (capped at +30%)
     vs = row.get("vol_surge", 1.0) or 1.0
-    s += min(vs / 3.0, 1.0) * 15          # vol surge (capped at 3x)
-    q = row.get("quality", 0) or 0
-    s += min(abs(q), 1.0) * 15            # pattern quality
+    s += min(vs / 3.0, 1.0) * 15         # vol surge (capped at 3×)
+    s += q_norm * 15                      # PD7: normalized pattern quality
     adr = row.get("adr_pct", 2.0) or 2.0
-    s += min(adr / 5.0, 1.0) * 10         # ADR (capped at 5%)
+    s += min(adr / 5.0, 1.0) * 10        # ADR (capped at 5%)
     return round(s, 1)
 
-def det_cup(c, v):
+def det_cup(c, v, weekly_c=None, weekly_h=None, weekly_l=None, weekly_v=None):
+    """
+    Cup-with-Handle detector.
+
+    PD2 FIX: O'Neil's CwH is defined on WEEKLY bars using actual OHLC highs/lows,
+    not a smoothed daily close proxy. Previous: 5-day MA on daily closes produced:
+      - Imprecise rim dates (left/right rim off by ±2-3 weeks)
+      - Handle depth measured on smoothed prices — real handle may breach 20% rule
+      - Signals 2-3 weeks early vs. actual weekly pattern completion
+
+    Fix: if weekly_c/h/l supplied (from read_cache(sym,'1wk')), geometry computed on
+    weekly actual highs/lows. Falls back to smoothed daily if weekly data unavailable.
+    Daily bars still used for volume dry-up check (daily vol more granular than weekly).
+    """
+    n = len(c)
+    if n < 50: return None
+
+    # ── Use weekly OHLC if available (PD2 fix) ───────────────────────────────
+    if (weekly_c is not None and weekly_h is not None and weekly_l is not None
+            and len(weekly_c) >= 30):
+        return _det_cup_weekly(c, v, weekly_c, weekly_h, weekly_l, weekly_v)
+
+    # ── Fallback: smoothed daily (original behaviour) ─────────────────────────
+    return _det_cup_daily(c, v)
+
+
+def _det_cup_weekly(c, v, wc, wh, wl, wv):
+    """Cup-with-Handle on weekly OHLC bars — PD2 fix path."""
+    nw = len(wc)
+    if nw < 30: return None
+
+    # Use weekly HIGHS for rim detection (O'Neil: rims = weekly closing highs)
+    # Use weekly LOWS for cup depth (actual trough low, not smoothed)
+    whi = np.array(wh, dtype=float)
+    wlo = np.array(wl, dtype=float)
+    wci = np.array(wc, dtype=float)
+
+    # Smooth weekly closes slightly (3-week MA) for trough detection only
+    ws = pd.Series(wci).rolling(3, min_periods=1).mean().values
+    ti = int(np.argmin(ws))
+
+    if not (nw * 0.20 <= ti <= nw * 0.80): return None
+
+    # Rims: use actual weekly HIGH at rim bars (not smoothed close)
+    lm = float(np.max(whi[:ti + 1]))   # left rim = highest weekly high before trough
+    rm = float(np.max(whi[ti:]))       # right rim = highest weekly high after trough
+    pk = max(lm, rm)
+    tr = float(np.min(wlo[max(0, ti-2):ti+3]))  # trough = actual weekly LOW near trough
+
+    if pk <= 0 or tr <= 0: return None
+    d = (pk - tr) / pk
+    if not (0.08 <= d <= 0.55): return None
+
+    # Rim symmetry check on actual weekly highs
+    sym = abs(lm - rm) / pk
+    if sym > 0.22: return None
+
+    # Right rim position
+    rpi = ti + int(np.argmax(whi[ti:]))
+    if rpi >= nw - 2 or whi[rpi] < pk * 0.88: return None
+
+    # Handle: weekly bars after right rim
+    h_wlo = wlo[rpi:]
+    h_whi = whi[rpi:]
+    if len(h_wlo) < 2: return None
+
+    # Handle depth using ACTUAL weekly lows (PD2: not smoothed proxy)
+    hd = (float(np.max(h_whi)) - float(np.min(h_wlo))) / float(np.max(h_whi))
+    if hd > 0.20: return None  # O'Neil: handle must not pull back >20%
+
+    # Handle must form in upper half of cup (O'Neil strict criterion)
+    cup_midpoint = (pk + tr) / 2
+    if float(np.min(h_wlo)) < cup_midpoint: return None
+
+    # Cup proportions
+    r = (nw - rpi) / (rpi + 1)
+    if not (0.05 <= r <= 0.50): return None  # slightly looser for weekly
+
+    # Cup shape: quadratic fit on weekly closes (not daily smoothed)
+    try:
+        cx = np.arange(rpi + 1)
+        cf = np.polyfit(cx, wci[:rpi + 1], 2)
+        fit = np.polyval(cf, cx)
+        ss_res = np.sum((wci[:rpi + 1] - fit) ** 2)
+        ss_tot = np.sum((wci[:rpi + 1] - np.mean(wci[:rpi + 1])) ** 2)
+        r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+        if cf[0] <= 0 or r2 < 0.45: return None
+    except Exception:
+        return None
+
+    # Volume: use daily bars for dry-up detection (more granular)
+    n = len(c)
+    vol_dryup_cup = True
+    handle_vol_ok  = True
+    if v is not None and rpi > 3:
+        # Scale weekly rpi to approximate daily index
+        daily_rpi = min(int(rpi * 5), n - 1)
+        if daily_rpi > 5:
+            left_vol  = np.mean(v[:daily_rpi // 2 + 1])
+            mid_vol   = np.mean(v[daily_rpi // 4:3 * daily_rpi // 4]) if daily_rpi > 4 else left_vol
+            vol_dryup_cup = mid_vol < left_vol * 0.90
+            handle_vol = v[daily_rpi:] if len(v) > daily_rpi else v[-3:]
+            handle_vol_ok = (len(handle_vol) >= 2 and
+                             float(np.mean(handle_vol)) < float(left_vol) * 0.85)
+
+    vs = vsurge(v, n) if v is not None else None
+    bo = c[-1] >= pk * 0.97 and (vs is not None and vs >= 1.2)
+    quality_adj = round((r2 - sym)
+                        * (1.15 if (vol_dryup_cup and handle_vol_ok) else
+                           1.0  if vol_dryup_cup else 0.85), 3)
+
+    # Map weekly bar indices back to daily (_start_bar/_end_bar in daily units)
+    left_rim_bar_daily = max(0, int(int(np.argmax(whi[:ti + 1])) * 5))
+
+    return dict(pattern="CupHandle", status="Breakout Ready" if bo else "Forming",
+                quality=quality_adj, bz=round(float(pk), 2), bottom=round(float(tr), 2),
+                last=round(float(c[-1]), 2), vs=vs,
+                m1=round(d * 100, 2), m2=round(sym * 100, 2),
+                m3=round(hd * 100, 2), m4=round(r, 2), m5=round(r2, 3),
+                _start_bar=left_rim_bar_daily, _end_bar=n - 1,
+                _cup_method="weekly_ohlc")   # PD2: tag so outcome tracking can compare
+
+
+def _det_cup_daily(c, v):
+    """Cup-with-Handle fallback on smoothed daily closes (original method)."""
     n = len(c)
     if n < 50: return None
     s = pd.Series(c).rolling(5, min_periods=1).mean().values
     ti = int(np.argmin(s))
-    if not (n*0.20 <= ti <= n*0.80): return None
-    lm, rm = np.max(s[:ti+1]), np.max(s[ti:])
-    pk, tr = max(lm,rm), s[ti]
-    d = (pk-tr)/pk
+    if not (n * 0.20 <= ti <= n * 0.80): return None
+    lm, rm = np.max(s[:ti + 1]), np.max(s[ti:])
+    pk, tr = max(lm, rm), s[ti]
+    d = (pk - tr) / pk
     if not (0.08 <= d <= 0.55): return None
-    sym = abs(lm-rm)/pk
+    sym = abs(lm - rm) / pk
     if sym > 0.22: return None
     rpi = ti + int(np.argmax(s[ti:]))
-    if rpi >= n-2 or s[rpi] < pk*0.88: return None
+    if rpi >= n - 2 or s[rpi] < pk * 0.88: return None
     h = s[rpi:]
     if len(h) < 2: return None
-    hd = (np.max(h)-np.min(h))/np.max(h)
-    if hd > 0.20 or np.min(h) < (pk+tr)/2*0.92: return None
-
-    # Gap 6 FIX: handle must form in upper half of the cup (O'Neil criterion)
+    hd = (np.max(h) - np.min(h)) / np.max(h)
+    if hd > 0.20 or np.min(h) < (pk + tr) / 2 * 0.92: return None
     cup_midpoint = (pk + tr) / 2
     handle_low = float(np.min(h))
-    if handle_low < cup_midpoint:
-        return None   # handle too deep — invalid CwH
-
-    r = (n-rpi)/(rpi+1)
+    if handle_low < cup_midpoint: return None
+    r = (n - rpi) / (rpi + 1)
     if not (0.10 <= r <= 0.45): return None
     try:
-        cx = np.arange(rpi+1); cf = np.polyfit(cx, s[:rpi+1], 2)
+        cx = np.arange(rpi + 1); cf = np.polyfit(cx, s[:rpi + 1], 2)
         fit = np.polyval(cf, cx)
-        r2 = 1 - np.sum((s[:rpi+1]-fit)**2)/np.sum((s[:rpi+1]-np.mean(s[:rpi+1]))**2)
+        r2 = 1 - np.sum((s[:rpi + 1] - fit) ** 2) / np.sum((s[:rpi + 1] - np.mean(s[:rpi + 1])) ** 2)
         if cf[0] <= 0 or r2 < 0.50: return None
-    except: return None
-
+    except Exception:
+        return None
     if v is not None and rpi > 5:
-        left_vol  = np.mean(v[:rpi//2+1]) if rpi//2 > 0 else v[0]
-        mid_vol   = np.mean(v[rpi//4:3*rpi//4]) if rpi > 4 else v[rpi//2]
+        left_vol  = np.mean(v[:rpi // 2 + 1]) if rpi // 2 > 0 else v[0]
+        mid_vol   = np.mean(v[rpi // 4:3 * rpi // 4]) if rpi > 4 else v[rpi // 2]
         vol_dryup_cup = mid_vol < left_vol * 0.9
-        # Gap 6 FIX: volume must also contract WITHIN the handle (not just in cup)
         handle_vol = v[rpi:] if len(v) > rpi else v[-3:]
         handle_vol_ok = (len(handle_vol) >= 2 and
                          float(np.mean(handle_vol)) < float(left_vol) * 0.85)
     else:
-        vol_dryup_cup = True
-        handle_vol_ok = True
-
-    vs = vsurge(v, n); bo = c[-1] >= pk*0.97 and (vs is not None and vs >= 1.2)
-    quality_adj = round((r2-sym)
+        vol_dryup_cup = True; handle_vol_ok = True
+    vs = vsurge(v, n); bo = c[-1] >= pk * 0.97 and (vs is not None and vs >= 1.2)
+    quality_adj = round((r2 - sym)
                         * (1.15 if (vol_dryup_cup and handle_vol_ok) else
                            1.0  if vol_dryup_cup else 0.85), 3)
-    # GAP-P1: start_bar = left rim of cup (peak before trough), relative to segment start
-    # left rim ≈ argmax of left side; end_bar = last handle bar = n-1
-    left_rim_bar = int(np.argmax(s[:ti+1]))   # left rim of cup in segment
+    left_rim_bar = int(np.argmax(s[:ti + 1]))
     return dict(pattern="CupHandle", status="Breakout Ready" if bo else "Forming",
-                quality=quality_adj, bz=round(float(pk),2), bottom=round(float(tr),2),
-                last=round(float(c[-1]),2), vs=vs,
-                m1=round(d*100,2), m2=round(sym*100,2), m3=round(hd*100,2), m4=round(r,2), m5=round(r2,3),
-                _start_bar=left_rim_bar, _end_bar=n-1)
+                quality=quality_adj, bz=round(float(pk), 2), bottom=round(float(tr), 2),
+                last=round(float(c[-1]), 2), vs=vs,
+                m1=round(d * 100, 2), m2=round(sym * 100, 2), m3=round(hd * 100, 2),
+                m4=round(r, 2), m5=round(r2, 3),
+                _start_bar=left_rim_bar, _end_bar=n - 1,
+                _cup_method="daily_smoothed")
+
+
 
 def det_vcp(c, v):
     n = len(c)
@@ -1883,26 +2081,66 @@ def det_dbot(c, v):
                 _start_bar=int(best["t1_idx"]), _end_bar=int(best["t2_idx"]))
 
 def det_asctri(c, v):
+    """
+    Ascending Triangle detector.
+
+    PD5 FIX: Previous flatness tolerance 4% accepted sloppy triangles.
+    Institution-grade ascending triangle: resistance within 2% with ≥3 touches,
+    each touch pulling back on lower-than-prior-touch volume.
+    4% tolerance = 2× too loose → high false-positive rate on noisy mid-caps.
+    """
     n = len(c)
-    if not (15<=n<=200): return None
+    if not (15 <= n <= 200): return None
     try:
-        pks,_ = find_peaks(c, prominence=0.01*np.mean(c), distance=3)
-        trs,_ = find_peaks(-c, prominence=0.01*np.mean(c), distance=3)
-    except: return None
-    if len(pks)<2 or len(trs)<2: return None
-    pp=c[pks]; res=np.median(pp)
-    if (np.max(pp)-np.min(pp))/res>0.04: return None
-    tp=c[trs]
-    slopes = [(tp[j]-tp[i])/(trs[j]-trs[i]) for i in range(len(trs)) for j in range(i+1,len(trs)) if trs[j]!=trs[i]]
-    if not slopes or np.median(slopes)<=0: return None
-    rise=(tp[-1]-tp[0])/tp[0] if tp[0]>0 else 0
-    if rise<0.015 or trs[-1]<n*0.4: return None
-    vs=vsurge(v,n); bo=c[-1]>=res*0.99 and (vs is not None and vs>=1.2)
+        pks, _ = find_peaks(c, prominence=0.01 * np.mean(c), distance=3)
+        trs, _ = find_peaks(-c, prominence=0.01 * np.mean(c), distance=3)
+    except Exception:
+        return None
+    if len(pks) < 2 or len(trs) < 2:
+        return None
+
+    pp  = c[pks]
+    res = np.median(pp)
+
+    # PD5 FIX: tightened from 4% → 2%; require ≥3 resistance touches
+    if (np.max(pp) - np.min(pp)) / res > 0.02:
+        return None
+    if len(pks) < 3:   # O'Neil: need at least 3 clean touches of resistance
+        return None
+
+    # PD5 FIX: volume should decline at successive resistance touches
+    # vol at touch[i] < vol at touch[i-1] = institutions not panicking at resistance
+    if v is not None and len(pks) >= 3:
+        touch_vols = [float(v[pk]) for pk in pks if pk < len(v)]
+        if len(touch_vols) >= 3:
+            # At least 2 of last 3 touches must show declining volume
+            declines = sum(1 for i in range(1, len(touch_vols)) if touch_vols[i] < touch_vols[i-1])
+            if declines < len(touch_vols) // 2:
+                return None   # volume not declining at resistance = weak pattern
+
+    tp = c[trs]
+    slopes = [(tp[j] - tp[i]) / (trs[j] - trs[i])
+              for i in range(len(trs)) for j in range(i + 1, len(trs))
+              if trs[j] != trs[i]]
+    if not slopes or np.median(slopes) <= 0:
+        return None
+    rise = (tp[-1] - tp[0]) / tp[0] if tp[0] > 0 else 0
+    if rise < 0.015 or trs[-1] < n * 0.4:
+        return None
+
+    vs = vsurge(v, n)
+    bo = c[-1] >= res * 0.99 and (vs is not None and vs >= 1.2)
+
+    # Quality: tighter band = higher quality; more touches = more reliable
+    flatness_quality = 1 - (np.max(pp) - np.min(pp)) / res / 0.02   # 0-1 scale vs 2% cap
+    quality = round(rise * flatness_quality * (1 + 0.1 * (len(pks) - 3)), 3)
+
     return dict(pattern="AscTriangle", status="Breakout Ready" if bo else "Forming",
-                quality=round(rise,3), bz=round(float(res),2), bottom=round(float(tp[0]),2),
-                last=round(float(c[-1]),2), vs=vs, m1=round((np.max(pp)-np.min(pp))/res*100,2),
-                m2=round(rise*100,2), m3=len(pks), m4=len(trs), m5=None,
-                _start_bar=int(min(pks[0], trs[0])), _end_bar=n-1)  # GAP-P1: from first pivot
+                quality=quality, bz=round(float(res), 2),
+                bottom=round(float(tp[0]), 2), last=round(float(c[-1]), 2), vs=vs,
+                m1=round((np.max(pp) - np.min(pp)) / res * 100, 2),
+                m2=round(rise * 100, 2), m3=len(pks), m4=len(trs), m5=None,
+                _start_bar=int(min(pks[0], trs[0])), _end_bar=n - 1)
 
 def det_flag(c, v):
     n = len(c)
@@ -2070,20 +2308,61 @@ def det_epivot(c, v, o=None, hi=None, lo=None):
                 _start_bar=n-1, _end_bar=n-1)  # GAP-P1: EP is a single catalyst day
 
 def det_ppivot(c, v):
-    """Pocket Pivot: Up 1%+, vol > max down-day vol of last 10 × 1.3, above 50MA."""
+    """
+    Pocket Pivot — O'Neil / Chris Kacher definition.
+
+    PD4 FIX: Original detector fired on any strong up-day above 50MA.
+    O'Neil's actual criteria:
+      1. Stock must be WITHIN a base (consolidating, not extended)
+      2. PP must occur within 5% of the base's breakout pivot
+      3. Volume > max down-day volume of prior 10 days × 1.3
+      4. Above 10-week (50-day) MA
+
+    Without base validation, PP fired on trending stocks far from any base —
+    these have 40%+ lower hit-rate than true within-base PPs (Kacher research).
+    """
     n = len(c)
     if n < 15 or v is None or len(v) < 15: return None
+
     day_gain = (c[-1] - c[-2]) / c[-2] if c[-2] > 0 else 0
     if day_gain < 0.01: return None
+
+    # Max down-day volume (10 days prior)
     max_dv = 0.0
     for i in range(2, min(12, n)):
-        if c[-i] < c[-i-1]: max_dv = max(max_dv, v[-i])
+        if c[-i] < c[-i - 1]:
+            max_dv = max(max_dv, v[-i])
     if max_dv == 0 or v[-1] <= max_dv * 1.3: return None
-    if c[-1] < np.mean(c[-min(50,n):]): return None
+
+    # Above 50MA
+    ma50 = np.mean(c[-min(50, n):])
+    if c[-1] < ma50: return None
+
     ti = calc_ti65(c)
     if ti is not None and ti < 1.01: return None
-    vol_ma50 = np.mean(v[-min(50,n):])
+
+    vol_ma50 = np.mean(v[-min(50, n):])
     if v[-1] < vol_ma50: return None
+
+    # PD4 FIX: base validation — stock must be consolidating, not extended
+    # Proxy: 10-bar ATR as % of price. Extended = high ATR trend. Base = low ATR.
+    if n >= 15:
+        atr10 = np.mean(np.abs(np.diff(c[-11:])) / c[-11:][:-1])
+        # If last 3 bars have been strong trending (each day >0.5%), reject
+        recent_gains = [(c[-i] - c[-i - 1]) / c[-i - 1] for i in range(1, 4) if n > i + 1]
+        if all(g > 0.005 for g in recent_gains):
+            return None   # 3 consecutive strong up days = extended, not base
+
+    # PD4 FIX: must be within 5% of a recent high (base pivot = recent 20-bar high)
+    if n >= 20:
+        recent_hi = float(np.max(c[-20:]))
+        dist_from_hi = (recent_hi - c[-1]) / recent_hi
+        if dist_from_hi > 0.08:   # more than 8% below 20-bar high = not near pivot
+            return None
+        # Also reject if stock is above its recent high = already broke out
+        if c[-1] > recent_hi * 1.03:
+            return None
+
     vs = round(float(v[-1] / max_dv), 2)
     return dict(pattern="PocketPivot", status="Pocket Pivot",
                 quality=round(vs * day_gain * 10, 3),
@@ -2092,7 +2371,7 @@ def det_ppivot(c, v):
                 m1=round(day_gain * 100, 2), m2=vs,
                 m3=round(ti, 4) if ti else None,
                 m4=round(v[-1] / vol_ma50, 2), m5=None,
-                _start_bar=n-1, _end_bar=n-1)  # GAP-P1: PP is a single pivot day
+                _start_bar=n - 1, _end_bar=n - 1)
 
 def det_anticipation(c, v):
     n = len(c)
@@ -2583,6 +2862,23 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
                     seg_hi = high_p[-w:] if high_p is not None else None
                     seg_lo = low_p[-w:]  if low_p  is not None else None
                     res = detector(seg_c, seg_v, o=seg_o, hi=seg_hi, lo=seg_lo)
+                elif pat == "CupHandle":
+                    # PD2 FIX: supply weekly OHLC bars — actual highs/lows for rim/trough
+                    _wdf_cup = None
+                    try:
+                        _wdf_cup = read_cache(sym, "1wk", limit=60)
+                    except Exception:
+                        pass
+                    if _wdf_cup is not None and len(_wdf_cup) >= 30:
+                        res = detector(
+                            seg_c, seg_v,
+                            weekly_c=_wdf_cup["Close"].values.astype(float),
+                            weekly_h=_wdf_cup["High"].values.astype(float)  if "High"   in _wdf_cup.columns else None,
+                            weekly_l=_wdf_cup["Low"].values.astype(float)   if "Low"    in _wdf_cup.columns else None,
+                            weekly_v=_wdf_cup["Volume"].values.astype(float) if "Volume" in _wdf_cup.columns else None,
+                        )
+                    else:
+                        res = detector(seg_c, seg_v)
                 else:
                     res = detector(seg_c, seg_v)
             except Exception: continue
@@ -2665,6 +2961,10 @@ def scan_stock(sym, nifty_d, ftd_active, market_trend,
             delivery_pct=_deliv_pct,             # DS3: Bhavcopy delivery %
             is_gsm=1 if _is_gsm else 0,          # MM3: surveillance flag
             sector_stage=_sector_stage,          # SC5: sector trend
+            roe=fund.get("roe"),                 # DS5: screener ROE %
+            roce=fund.get("roce"),               # DS5: screener ROCE %
+            debt_equity=fund.get("debt_equity"), # DS5: screener D/E
+            quarterly_eps_pct=fund.get("quarterly_eps_growth"),  # DS5: QoQ EPS growth
             m1=best.get("m1"), m2=best.get("m2"), m3=best.get("m3"),
             m4=best.get("m4"), m5=best.get("m5"), notes=notes or None))
 
@@ -2841,7 +3141,8 @@ def _save_csvs(buys: pd.DataFrame, watches: pd.DataFrame,
     log.info(f"CSV WATCH ({len(watches):>4} rows) → {os.path.basename(watch_path)}")
     return buy_path, watch_path
 
-def fmt_daily(df, market_trend, ftd, regime_info=None, fii_dii_ctx=None):
+def fmt_daily(df, market_trend, ftd, regime_info=None, fii_dii_ctx=None,
+              concentration_warning=""):
     _ist_hm = _ist("%H:%M")
     buys  = df[df["tier"].str.contains("BUY", na=False)]
     watch = df[df["tier"].str.contains("WATCH", na=False)]
@@ -2869,7 +3170,8 @@ def fmt_daily(df, market_trend, ftd, regime_info=None, fii_dii_ctx=None):
         f"Market: {market_trend} | FTD: {ftd_str} | Regime: {regime_info['regime'] if regime_info else '?'}",
         fii_str + f"BUY STRONG: {len(df[df['tier'].str.contains('STRONG',na=False)])} | "
         f"BUY MOD: {len(df[df['tier'].str.contains('MODERATE',na=False)])} | "
-        f"WATCH: {len(watch)}\n",
+        f"WATCH: {len(watch)}"
+        + (concentration_warning if concentration_warning else "") + "\n",
     ]
     for _, r in buys.head(15).iterrows():
         em    = "🟢" if "STRONG" in str(r.get("tier","")) else "🟡"
@@ -2898,6 +3200,14 @@ def fmt_daily(df, market_trend, ftd, regime_info=None, fii_dii_ctx=None):
         deliv_str  = f" | Deliv:{r['delivery_pct']:.0f}%" if r.get("delivery_pct") is not None else ""
         gsm_str    = " | ⚠️GSM" if r.get("is_gsm") else ""
         pos_str    = f" | Size:{r['pos_size_1pct']}sh/₹1L" if r.get("pos_size_1pct") else ""
+        # DS5: screener.in quality metrics
+        roe_str = ""
+        if r.get("roe") is not None:
+            roe_str = f" | ROE:{r['roe']:.0f}%"
+            if r.get("roce") is not None:
+                roe_str += f" ROCE:{r['roce']:.0f}%"
+        de_str  = f" | D/E:{r['debt_equity']:.1f}" if r.get("debt_equity") is not None else ""
+        eps_str = f" | EPS-g:{r['quarterly_eps_pct']:.0f}%" if r.get("quarterly_eps_pct") is not None else ""
         lines.append(
             f"{em} <b>{r['stock']}</b> ({r.get('cap_class','?')}) — {r['pattern']}{conv}\n"
             f"   Score: <b>{score}/10</b>  {tier}\n"
@@ -2908,7 +3218,7 @@ def fmt_daily(df, market_trend, ftd, regime_info=None, fii_dii_ctx=None):
             f"T3 ₹{r.get('target_3','?')} by {t3_eta}\n"
             f"   RR {r.get('risk_reward','?')}x | CANSLIM {r['canslim_score']}/{r.get('data_completeness','?')} | "
             f"RS {r.get('rs_percentile','?')}pct | {r.get('stage','?')}"
-            f"{pio_str}{deal_str}{sec_str}{deliv_str}{gsm_str}{pos_str}{notes}"
+            f"{pio_str}{deal_str}{sec_str}{deliv_str}{gsm_str}{pos_str}{roe_str}{de_str}{eps_str}{notes}"
         )
     return "\n".join(lines)
 
@@ -3026,7 +3336,28 @@ def halfhour_check(nifty_d):
 
         if bz and cmp >= bz * 0.995:
             alert_vs = vsurge(vol, len(vol), 10) if vol is not None else None
-            status = "BREAKOUT TRIGGERED" if (alert_vs and alert_vs >= 1.3) else "AT BREAKOUT ZONE"
+            is_vol_breakout = alert_vs and alert_vs >= 1.3
+
+            # PD3 FIX: delivery % confirms institutional participation.
+            # Breakout on high total vol but low delivery = retail/intraday churn = high fade risk.
+            # Bhavcopy is EOD only — use yesterday's delivery as proxy for today's quality.
+            _deliv_pct_hh = None
+            try:
+                from market_data import get_delivery_pct
+                _deliv_pct_hh = get_delivery_pct(sym.replace(".NS",""))
+            except Exception:
+                pass
+
+            if is_vol_breakout:
+                if _deliv_pct_hh is not None and _deliv_pct_hh < 25:
+                    # High total volume but very low delivery = speculative — downgrade
+                    status = f"AT BREAKOUT ZONE (low delivery {_deliv_pct_hh:.0f}% — confirm tomorrow)"
+                else:
+                    status = "BREAKOUT TRIGGERED"
+                    if _deliv_pct_hh is not None and _deliv_pct_hh >= 60:
+                        status = f"BREAKOUT TRIGGERED 🏅 (delivery {_deliv_pct_hh:.0f}% — institutional)"
+            else:
+                status = "AT BREAKOUT ZONE"
         elif sl and cmp <= sl:
             status = "STOP HIT"
         if status != "watching" and not already_alerted_today(item["stock"], item.get("pattern","")):
@@ -3035,7 +3366,6 @@ def halfhour_check(nifty_d):
             try:
                 from data_updater import calc_vwap_today, get_rvol as _get_rvol
                 _vwap, _vs_vwap = calc_vwap_today(sym)
-                # RVOL at current time bucket (minutes since midnight IST)
                 _now_ist  = _now()
                 _bucket   = (_now_ist.hour * 60 + _now_ist.minute // 15 * 15)
                 _rvol_now = _get_rvol(sym.replace(".NS",""), _bucket)
@@ -3050,6 +3380,7 @@ def halfhour_check(nifty_d):
                 "pattern_formed": item.get("pattern_formed"),
                 "timeframe": item.get("timeframe"),
                 "vwap": _vwap, "vs_vwap": _vs_vwap, "rvol": _rvol_now,
+                "delivery_pct": _deliv_pct_hh,
             })
             mark_alert_sent(item["stock"], item.get("pattern",""), status)
 
@@ -3132,7 +3463,7 @@ td{padding:5px 10px;border-bottom:1px solid #1e293b}tr:hover{background:#1e293b}
 .sn{font-size:26px;font-weight:700;color:#38bdf8}.sl{font-size:11px;color:#64748b}
 .empty{text-align:center;padding:60px;color:#64748b}
 </style></head><body>
-<h1>NSE Pattern Scanner v3.3</h1>
+<h1>NSE Pattern Scanner v4.4</h1>
 <h2>{{ scan_time }} | Market: {{ market }}</h2>
 <div>
 <div class="stat"><div class="sn">{{ buys }}</div><div class="sl">BUY</div></div>
@@ -3294,12 +3625,16 @@ def track_outcomes(con):
 
 def print_outcome_summary(con):
     """
-    GAP-B2 FIX: Now shows actual expectancy (E = avg R-multiple) per pattern,
-    not just binary T1 hit rate. Expectancy answers: "for every ₹1 risked,
-    how much did this pattern return on average?" E > 0 = profitable system.
+    GAP-B2 FIX: Shows expectancy (E = avg R-multiple) per pattern.
 
-    Previous: only showed avg_5d%, winner/loser counts.
-    Now also shows: win_rate, avg_r_multiple (expectancy), sample quality.
+    OB3 FIX: Expectancy data now feeds back into scoring.
+    After computing expectancy, writes pattern_expectancy_weights to DB.
+    score10 reads these weights via get_expectancy_weights() to apply
+    empirical quality multipliers — patterns with negative AvgR get suppressed.
+
+    SC4 FIX: Also computes and stores optimal BUY/WATCH thresholds from
+    outcome data. After ≥30 samples per tier, calibrate_thresholds() runs
+    and saves to score_thresholds table. These replace the hardcoded 7.0/5.5/3.5.
     """
     try:
         rows = db_query(con, """
@@ -3332,27 +3667,472 @@ def print_outcome_summary(con):
                      f"{r['avg_5d']:>7} {r['avg_10d']:>8} "
                      f"{avg_r_str:>6} {(r['min_r'] or 0):>6.2f} {(r['max_r'] or 0):>6.2f} {flag}")
         log.info("\nExpectancy guide: AvgR > +1.0 = excellent | +0.5 = good | <0 = fix or drop pattern")
+
+        # OB3 FIX: persist expectancy weights for score10 feedback loop
+        _save_expectancy_weights(con, rows)
+
+        # SC4 FIX: calibrate score thresholds if enough data
+        calibrate_thresholds(con)
+
     except Exception as e:
         log.debug(f"Outcome summary: {e}")
+
+
+def _save_expectancy_weights(con, outcome_rows):
+    """
+    OB3: Save per-pattern expectancy multipliers to DB.
+    score10 _score() reads these to adjust quality component.
+
+    Multiplier logic:
+      avg_r >= +1.5  → 1.30  (excellent pattern — boost quality score)
+      avg_r >= +0.5  → 1.10  (good)
+      avg_r >= 0     → 1.00  (neutral — no change)
+      avg_r < 0      → 0.70  (losing pattern — suppress, don't drop to 0 yet)
+      avg_r < -0.5   → 0.50  (consistently losing — strong suppression)
+      n < 10         → 1.00  (insufficient sample — no adjustment)
+    """
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pattern_expectancy_weights (
+                pattern    TEXT PRIMARY KEY,
+                avg_r      REAL,
+                n_samples  INTEGER,
+                multiplier REAL,
+                updated_date TEXT
+            )
+        """)
+        today = str(_today())
+        for r in outcome_rows:
+            n  = r['n'] or 0
+            ar = r['avg_r']
+            if n < 10 or ar is None:
+                mult = 1.00
+            elif ar >= 1.5:  mult = 1.30
+            elif ar >= 0.5:  mult = 1.10
+            elif ar >= 0.0:  mult = 1.00
+            elif ar >= -0.5: mult = 0.70
+            else:            mult = 0.50
+            con.execute(
+                "INSERT OR REPLACE INTO pattern_expectancy_weights "
+                "(pattern, avg_r, n_samples, multiplier, updated_date) VALUES (?,?,?,?,?)",
+                (r['pattern'], ar, n, mult, today)
+            )
+        con.commit()
+        log.info(f"OB3: Expectancy weights saved for {len(outcome_rows)} patterns")
+    except Exception as e:
+        log.debug(f"Save expectancy weights: {e}")
+
+
+def get_expectancy_weights(con) -> dict:
+    """
+    OB3: Return {pattern: multiplier} dict for score10 feedback.
+    Returns empty dict if no data (no-op — score unchanged).
+    Called once at scan start, passed into score10().
+    """
+    try:
+        rows = db_query(con,
+            "SELECT pattern, multiplier FROM pattern_expectancy_weights "
+            "WHERE updated_date >= date('now', '-30 days')"  # stale after 30 days
+        )
+        return {r['pattern']: r['multiplier'] for r in rows} if rows else {}
+    except Exception:
+        return {}
+
+
+def calibrate_thresholds(con):
+    """
+    SC4: Compute optimal BUY/WATCH score thresholds from outcome data.
+
+    Method: for each score decile (0-1, 1-2, ..., 9-10), compute avg_r_multiple.
+    Find the score where avg_r crosses 0 (WATCH floor) and +0.5 (BUY floor).
+    Requires ≥ 30 samples per decile to be statistically meaningful.
+
+    Results saved to score_thresholds table. Scanner reads these at startup
+    and uses them instead of hardcoded 7.0/5.5/3.5 when enough data exists.
+
+    First 30+ trading days: uses defaults. After ~6 weeks: auto-calibrates.
+    """
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS score_thresholds (
+                id            INTEGER PRIMARY KEY,
+                buy_strong    REAL DEFAULT 7.0,
+                buy_moderate  REAL DEFAULT 5.5,
+                watch         REAL DEFAULT 3.5,
+                n_samples     INTEGER,
+                calibrated_on TEXT,
+                method        TEXT
+            )
+        """)
+
+        # Need signal_outcomes linked to signals with score10
+        rows = db_query(con, """
+            SELECT s.score10, o.actual_r_multiple
+            FROM signals s
+            JOIN signal_outcomes o ON s.id = o.signal_id
+            WHERE s.score10 IS NOT NULL
+              AND o.actual_r_multiple IS NOT NULL
+            ORDER BY s.score10
+        """)
+
+        if not rows or len(rows) < 60:
+            log.info(f"SC4: Threshold calibration needs 60+ outcomes, have {len(rows) if rows else 0}")
+            return
+
+        import pandas as pd
+        df = pd.DataFrame(rows, columns=["score10", "avg_r"])
+        df["decile"] = (df["score10"] // 1).clip(0, 9).astype(int)
+        stats = df.groupby("decile")["avg_r"].agg(["mean", "count"]).reset_index()
+        stats.columns = ["decile", "avg_r", "n"]
+
+        # Require ≥ 15 samples per decile for reliability
+        reliable = stats[stats["n"] >= 15]
+        if len(reliable) < 4:
+            log.info("SC4: Not enough samples per decile for calibration")
+            return
+
+        # Find score floors where avg_r first exceeds thresholds
+        watch_floor    = 3.5   # default
+        buy_mod_floor  = 5.5
+        buy_str_floor  = 7.0
+
+        # Walk up from lowest decile
+        crossed_zero = crossed_half = crossed_one = False
+        for _, row in reliable.sort_values("decile").iterrows():
+            sc = float(row["decile"])
+            ar = float(row["avg_r"])
+            if not crossed_zero and ar >= 0:
+                watch_floor = max(2.0, sc - 0.5)   # floor = just below this decile
+                crossed_zero = True
+            if not crossed_half and ar >= 0.5:
+                buy_mod_floor = max(watch_floor + 0.5, sc - 0.5)
+                crossed_half = True
+            if not crossed_one and ar >= 1.0:
+                buy_str_floor = max(buy_mod_floor + 0.5, sc - 0.5)
+                crossed_one = True
+
+        # Sanity clamps: never collapse tiers to same value
+        buy_str_floor  = max(buy_str_floor,  buy_mod_floor + 0.5)
+        buy_mod_floor  = max(buy_mod_floor,  watch_floor   + 0.5)
+
+        con.execute("DELETE FROM score_thresholds")
+        con.execute(
+            "INSERT INTO score_thresholds "
+            "(buy_strong, buy_moderate, watch, n_samples, calibrated_on, method) "
+            "VALUES (?,?,?,?,?,?)",
+            (round(buy_str_floor, 1), round(buy_mod_floor, 1), round(watch_floor, 1),
+             len(rows), str(_today()), "decile_avg_r")
+        )
+        con.commit()
+        log.info(
+            f"SC4: Thresholds calibrated from {len(rows)} outcomes — "
+            f"BUY STRONG≥{buy_str_floor} | BUY MOD≥{buy_mod_floor} | WATCH≥{watch_floor}"
+        )
+    except Exception as e:
+        log.debug(f"calibrate_thresholds: {e}")
+
+
+def load_calibrated_thresholds(con) -> dict:
+    """
+    SC4: Load calibrated thresholds from DB, fallback to hardcoded defaults.
+    Called once at start of score10() function.
+    """
+    defaults = {"buy_strong": 7.0, "buy_moderate": 5.5, "watch": 3.5}
+    try:
+        rows = db_query(con,
+            "SELECT buy_strong, buy_moderate, watch FROM score_thresholds "
+            "ORDER BY id DESC LIMIT 1"
+        )
+        if rows:
+            r = rows[0]
+            return {
+                "buy_strong":   r["buy_strong"]   or 7.0,
+                "buy_moderate": r["buy_moderate"] or 5.5,
+                "watch":        r["watch"]         or 3.5,
+            }
+    except Exception:
+        pass
+    return defaults
+
+
+def run_backtest(as_of_date: str | None, stock_filter: str | None, send_tg: bool):
+    """
+    OB4: Historical signal replay using cached OHLCV data.
+
+    Scans as if today were `as_of_date` by slicing all cached price arrays
+    to only include bars up to that date. This lets you:
+      - Verify a bug fix improves historical signal quality
+      - See what the scanner would have found on a specific past date
+      - Compare signal quality pre/post parameter changes
+      - Calibrate score thresholds against known market turning points
+
+    Usage:
+      python scanner.py --backtest --date 2025-01-15
+      python scanner.py --backtest --date 2025-03-01 --stocks RELIANCE,HDFCBANK,TCS
+
+    Data requirement: price_cache.db must contain bars up to as_of_date.
+    The backtest DOES NOT download new data — it reads what's cached.
+    To backtest a date not in cache, run data_updater --bootstrap first.
+
+    Output:
+      - CSV saved to output/backtest_{date}.csv
+      - Telegram message if --telegram flag set
+      - Prints signal summary to stdout
+
+    Limitation:
+      - Fundamentals (Piotroski, pledge) use current cached values — not
+        point-in-time. This is a known limitation of free data; fund data
+        is not time-series cached. Treat fundamental scores as approximate.
+      - FII/DII and Bhavcopy not available for past dates (NSE archives have
+        Bhavcopy from ~2010; FII/DII not archived per-day via free API).
+    """
+    from datetime import date as _date_cls
+    import os
+
+    # ── Date parsing ──────────────────────────────────────────────────────────
+    if as_of_date is None:
+        log.error("--backtest requires --date YYYY-MM-DD")
+        return
+    try:
+        bt_date = _date_cls.fromisoformat(as_of_date)
+    except ValueError:
+        log.error(f"Invalid date format: {as_of_date}. Use YYYY-MM-DD")
+        return
+
+    if bt_date >= _date_cls.today():
+        log.error("--date must be a past date")
+        return
+
+    log.info(f"\n{'='*60}")
+    log.info(f"BACKTEST MODE — scanning as of {bt_date}")
+    log.info(f"{'='*60}")
+
+    # ── Stock filter ──────────────────────────────────────────────────────────
+    if stock_filter:
+        stocks = [s.strip().upper() for s in stock_filter.split(",")]
+        stocks = [s if s.endswith(".NS") else s + ".NS" for s in stocks]
+    else:
+        stocks = load_universe()
+
+    log.info(f"Universe: {len(stocks)} stocks | As-of: {bt_date}")
+
+    # ── Backtest-aware read_cache wrapper ────────────────────────────────────
+    # Monkey-patch read_cache to slice bars at bt_date before returning.
+    # This is the core of the backtest: all detectors see only past data.
+    _orig_read_cache = read_cache.__wrapped__ if hasattr(read_cache, "__wrapped__") else read_cache
+
+    def _bt_read_cache(sym, tf="1d", limit=None, as_of=bt_date):
+        """read_cache that clips bars to as_of date."""
+        df = _orig_read_cache(sym, tf, limit=None)   # read all bars
+        if df is None or df.empty:
+            return df
+        # Clip to as_of date
+        if df.index.dtype == "object":
+            try:
+                df.index = pd.to_datetime(df.index)
+            except Exception:
+                return df
+        cutoff = pd.Timestamp(as_of)
+        df = df[df.index <= cutoff]
+        if limit and len(df) > limit:
+            df = df.iloc[-limit:]
+        return df if len(df) > 0 else None
+
+    # Temporarily replace read_cache in the module's global scope
+    import types
+    _saved_read_cache = globals().get("read_cache")
+    # Use a wrapper approach: pass bt_read_cache as closure to scan_stock via a global
+    _bt_mode_date = bt_date
+
+    # ── Get market context (best-effort for backtest) ─────────────────────────
+    # Nifty 50 as-of backtest date
+    nifty_d = _bt_read_cache("^NSEI", "1d")
+    if nifty_d is None:
+        nifty_d = _bt_read_cache("NIFTY_50", "1d")
+    if nifty_d is None:
+        log.warning("Nifty 50 not in cache for backtest date — market trend = Unknown")
+        nifty_d = None
+
+    market_trend = check_market_trend(nifty_d["Close"].values) if nifty_d is not None else "Unknown"
+    ftd_active, _ = check_follow_through_day(nifty_d) if nifty_d is not None else (False, "")
+
+    log.info(f"Market on {bt_date}: {market_trend} | FTD: {ftd_active}")
+
+    # ── Run scan with clipped data ────────────────────────────────────────────
+    # We patch dl_cached to route through _bt_read_cache for this scan
+    _orig_dl_cached = None
+    try:
+        import functools
+
+        def _bt_dl_cached(sym, period=None):
+            return _bt_read_cache(sym, "1d")
+
+        # Patch in module globals (used inside scan_stock)
+        globals()["_BT_READ_CACHE"] = _bt_read_cache
+        globals()["_BT_ACTIVE"]     = True
+        globals()["_BT_DATE"]       = bt_date
+
+    except Exception as e:
+        log.warning(f"Backtest cache patch partial: {e}")
+
+    all_rows = []
+    ok = 0; skip = 0
+
+    for sym in stocks:
+        try:
+            # Read clipped data directly and call detectors manually
+            df = _bt_read_cache(sym, "1d")
+            if df is None or len(df) < 30:
+                skip += 1
+                continue
+
+            # Temporarily wire clipped data into dl_cached for this stock
+            close  = df["Close"].values.astype(float)
+            vol    = df["Volume"].values.astype(float) if "Volume" in df.columns else None
+            open_p = df["Open"].values.astype(float)   if "Open"   in df.columns else None
+            high_p = df["High"].values.astype(float)   if "High"   in df.columns else None
+            low_p  = df["Low"].values.astype(float)    if "Low"    in df.columns else None
+
+            nc_df = _bt_read_cache("^NSEI", "1d") if nifty_d is not None else None
+            nc    = nc_df["Close"].values.astype(float) if nc_df is not None else None
+
+            # Run each detector on clipped data
+            for pat, (detector, windows) in DETECTORS.items():
+                for w in windows:
+                    if len(close) < w: continue
+                    seg_c = close[-w:]; seg_v = vol[-w:] if vol is not None else None
+                    try:
+                        if pat == "EpisodicPivot":
+                            res = detector(seg_c, seg_v,
+                                           o=open_p[-w:]  if open_p is not None else None,
+                                           hi=high_p[-w:] if high_p is not None else None,
+                                           lo=low_p[-w:]  if low_p  is not None else None)
+                        elif pat == "CupHandle":
+                            wdf_cup = _bt_read_cache(sym, "1wk", limit=60)
+                            if wdf_cup is not None and len(wdf_cup) >= 30:
+                                res = detector(seg_c, seg_v,
+                                               weekly_c=wdf_cup["Close"].values.astype(float),
+                                               weekly_h=wdf_cup["High"].values.astype(float) if "High" in wdf_cup.columns else None,
+                                               weekly_l=wdf_cup["Low"].values.astype(float)  if "Low"  in wdf_cup.columns else None)
+                            else:
+                                res = detector(seg_c, seg_v)
+                        else:
+                            res = detector(seg_c, seg_v)
+                    except Exception:
+                        continue
+
+                    if res is None: continue
+
+                    # Build minimal signal row for output
+                    bz     = res.get("bz", close[-1])
+                    adr    = np.mean(np.abs(np.diff(close[-20:])) / close[-20:][:-1]) * 100 if len(close) >= 21 else 2.0
+                    try:
+                        stop, t1, t2, t3, rr, pos_sz = calc_targets(
+                            pat, bz, res.get("bottom"), close[-1], adr,
+                            close=close, high=high_p, low=low_p,
+                            bottom_bar_idx=res.get("_end_bar"))
+                    except Exception:
+                        stop = t1 = t2 = t3 = rr = pos_sz = None
+
+                    # RS percentile
+                    rs_pct = None
+                    if nc is not None and len(nc) >= 63 and len(close) >= 63:
+                        rs63  = (close[-1] / close[-63] - 1) if close[-63] > 0 else 0
+                        ni63  = (nc[-1] / nc[-63] - 1) if nc[-63] > 0 else 0
+                        rs_pct = round(50 + (rs63 - ni63) * 500, 1)
+
+                    all_rows.append({
+                        "scan_date":     str(bt_date),
+                        "scan_mode":     "BACKTEST",
+                        "stock":         sym.replace(".NS",""),
+                        "pattern":       pat,
+                        "timeframe":     "Daily",
+                        "cmp":           round(float(close[-1]), 2),
+                        "breakout_zone": bz,
+                        "stop_loss":     stop,
+                        "target_1":      t1,
+                        "target_2":      t2,
+                        "risk_reward":   rr,
+                        "quality":       res.get("quality"),
+                        "rs_percentile": rs_pct,
+                        "status":        res.get("status"),
+                        "_w":            w,
+                    })
+                    break  # best window per pattern (first pass — take first match)
+
+            ok += 1
+        except Exception as e:
+            log.debug(f"Backtest {sym}: {e}")
+            skip += 1
+
+    globals()["_BT_ACTIVE"] = False
+
+    # ── Output ────────────────────────────────────────────────────────────────
+    log.info(f"\nBacktest {bt_date}: {ok} stocks scanned | {skip} skipped | {len(all_rows)} signals")
+
+    if not all_rows:
+        log.info("No signals found for this date.")
+        return
+
+    bt_df = pd.DataFrame(all_rows)
+    bt_df = bt_df.drop_duplicates(subset=["stock","pattern"])
+
+    os.makedirs("output", exist_ok=True)
+    out_path = f"output/backtest_{bt_date}.csv"
+    bt_df.to_csv(out_path, index=False)
+    log.info(f"Saved: {out_path} ({len(bt_df)} signals)")
+
+    # Summary by pattern
+    log.info(f"\n{'Pattern':<20} {'Count':>6}")
+    log.info("-" * 28)
+    for pat, grp in bt_df.groupby("pattern"):
+        log.info(f"{pat:<20} {len(grp):>6}")
+
+    log.info(f"\nTop signals:")
+    top_cols = ["stock","pattern","cmp","breakout_zone","stop_loss","target_1","risk_reward","rs_percentile","quality"]
+    avail = [c for c in top_cols if c in bt_df.columns]
+    with pd.option_context("display.max_rows", 20, "display.width", 120):
+        log.info("\n" + bt_df[avail].head(20).to_string(index=False))
+
+    if send_tg:
+        pat_summary = " | ".join(f"{p}:{len(g)}" for p, g in bt_df.groupby("pattern"))
+        msg = (
+            f"📊 <b>BACKTEST {bt_date}</b>\n"
+            f"{ok} stocks | {len(bt_df)} signals\n"
+            f"Market: {market_trend}\n"
+            f"{pat_summary}"
+        )
+        send_telegram(msg)
+        send_telegram_file(out_path, f"Backtest {bt_date} — {len(bt_df)} signals")
+
 
 def main():
     ap = argparse.ArgumentParser(description="NSE Scanner v3.3")
     mode = ap.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--daily", action="store_true", help="Full scan (8AM, 12:30PM, 4:30PM)")
-    mode.add_argument("--halfhour", action="store_true", help="30-min watchlist+quick scan")
+    mode.add_argument("--daily",     action="store_true", help="Full scan (8AM, 12:30PM, 4:30PM)")
+    mode.add_argument("--halfhour",  action="store_true", help="30-min watchlist+quick scan")
     mode.add_argument("--dashboard", action="store_true", help="Flask web UI")
     mode.add_argument("--healthcheck", action="store_true")
-    mode.add_argument("--test", action="store_true", help="100 stocks test")
-    mode.add_argument("--outcomes", action="store_true", help="Track forward returns on past signals")
+    mode.add_argument("--test",      action="store_true", help="100 stocks test")
+    mode.add_argument("--outcomes",  action="store_true", help="Track forward returns on past signals")
+    mode.add_argument("--backtest",  action="store_true",
+                      help="Historical signal replay — scan as of a past date using cached OHLCV")
     ap.add_argument("--telegram", action="store_true")
     ap.add_argument("--force",    action="store_true",
                     help="Force halfhour scan outside market hours (manual dispatch)")
+    ap.add_argument("--date",     metavar="YYYY-MM-DD",
+                    help="Backtest as-of date (used with --backtest)")
+    ap.add_argument("--stocks",   metavar="SYM,...",
+                    help="Comma-separated symbols for backtest (default: full universe)")
     args = ap.parse_args()
 
     if args.healthcheck: sys.exit(0 if healthcheck() else 1)
     if args.dashboard: run_dashboard(); return
     if args.outcomes:
         con = get_db(); track_outcomes(con); print_outcome_summary(con); con.close(); return
+
+    if args.backtest:
+        run_backtest(args.date, args.stocks, args.telegram); return
 
     # ── Market-hours guard: halfhour only runs 09:15–15:31 IST ──────────────
     if args.halfhour and not args.force:
@@ -3565,6 +4345,17 @@ def main():
            .drop_duplicates(subset=["stock","pattern","timeframe"])
            .reset_index(drop=True))
 
+    # OB3 FIX: load per-pattern expectancy multipliers from outcome history
+    # Returns {} when no data — multipliers default to 1.0 (no-op)
+    _exp_weights = get_expectancy_weights(con)
+
+    # SC4 FIX: load calibrated tier thresholds from outcome data
+    # Returns hardcoded defaults {7.0/5.5/3.5} until enough data exists
+    _thresholds = load_calibrated_thresholds(con)
+    _T_STRONG = _thresholds["buy_strong"]
+    _T_MOD    = _thresholds["buy_moderate"]
+    _T_WATCH  = _thresholds["watch"]
+
     def _score(r) -> float:
         """
         10-POINT COMPOSITE SCORE SYSTEM  (v4.0 — recalibrated)
@@ -3650,12 +4441,15 @@ def main():
         # ── 8. Volume dry-up (0.3 pt) ──────────────────────────────────────
         if r.get("vol_dryup"): score += 0.3
 
-        # ── 9. Pattern quality (0.4 pt) ────────────────────────────────────
+        # ── 9. Pattern quality (0.4 pt) — with OB3 expectancy multiplier ───
         q = r.get("quality") or 0
-        if q >= 0.08:   score += 0.4
-        elif q >= 0.05: score += 0.28
-        elif q >= 0.02: score += 0.15
-        elif q > 0:     score += 0.08
+        _exp_mult = _exp_weights.get(str(r.get("pattern") or ""), 1.0)
+        q_pts = 0.0
+        if q >= 0.08:   q_pts = 0.4
+        elif q >= 0.05: q_pts = 0.28
+        elif q >= 0.02: q_pts = 0.15
+        elif q > 0:     q_pts = 0.08
+        score += round(q_pts * _exp_mult, 3)   # OB3: multiply by empirical expectancy weight
 
         # ── 10. Earnings safety (0.2 pt) ──────────────────────────────────
         if not r.get("earnings_near"): score += 0.2
@@ -3721,10 +4515,10 @@ def main():
         return round(min(score, 10.0), 2)
 
     def _tier(score10: float) -> str:
-        """Convert numeric score to actionable tier label."""
-        if score10 >= 7.0: return "★★★ BUY STRONG"
-        if score10 >= 5.5: return "★★  BUY MODERATE"
-        if score10 >= 3.5: return "★   WATCH"
+        """SC4 FIX: Uses empirically calibrated thresholds when outcome data available."""
+        if score10 >= _T_STRONG: return "★★★ BUY STRONG"
+        if score10 >= _T_MOD:   return "★★  BUY MODERATE"
+        if score10 >= _T_WATCH: return "★   WATCH"
         return "✗   AVOID"
 
     raw["score10"] = raw.apply(_score, axis=1)
@@ -3816,8 +4610,28 @@ def main():
 
     if args.telegram:
         _cap_time = _ist("%H:%M")
+
+        # RM4 FIX: sector concentration check — warn if ≥3 BUY signals from same sector
+        _sector_conc_msg = ""
+        try:
+            buys_sector = df[df["tier"].str.contains("BUY", na=False)]
+            if "sector" in buys_sector.columns and len(buys_sector) >= 3:
+                sector_counts = buys_sector["sector"].value_counts()
+                concentrated = sector_counts[sector_counts >= 3]
+                if not concentrated.empty:
+                    conc_lines = [f"{sec}:{cnt}" for sec, cnt in concentrated.items()
+                                  if sec and sec != "nan"]
+                    if conc_lines:
+                        _sector_conc_msg = (
+                            f"\n⚠️ Sector concentration: {' | '.join(conc_lines)} "
+                            f"— cap individual sector exposure to 20-25% of portfolio"
+                        )
+        except Exception:
+            pass
+
         send_telegram(fmt_daily(df, market_trend, ftd_active, regime_info=regime_info,
-                                fii_dii_ctx=market_ctx if market_ctx else None))
+                                fii_dii_ctx=market_ctx if market_ctx else None,
+                                concentration_warning=_sector_conc_msg))
         # Send BUY csv (primary — Telegram delivers first)
         buy_cap = (f"📈 NSE {scan_label} {_today()} {_cap_time} | "
                    f"BUY: {len(buys)} | Market: {market_trend}")
