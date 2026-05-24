@@ -1,4 +1,4 @@
-name: NSE Live Scanner v4.3
+name: NSE Live Scanner v4.2
 
 on:
   schedule:
@@ -49,415 +49,7 @@ on:
         description: "Run mode"
         required: true
         type: choice
-        options: [daily, halfhour, test, healthcheck, bootstrap]
-
-permissions:
-  contents: write
-
-# ════════════════════════════════════════════════════════════════════
-# DAILY — EOD update all 2139 stocks, full pattern scan, commit watchlist
-# ════════════════════════════════════════════════════════════════════
-jobs:
-
-  daily:
-    if: |
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'daily') ||
-      github.event.schedule == '50 23 * * 0-4' ||
-      github.event.schedule == '20 4 * * 1-5' ||
-      github.event.schedule == '20 8 * * 1-5'
-
-    runs-on: ubuntu-latest
-    timeout-minutes: 55
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: ${{ runner.os }}-pip-
-
-      - name: Install dependencies
-        run: pip install -q -r requirements.txt
-
-      # IR3 FIX: rolling 14-day cache key instead of ISO week number.
-      # ISO week key → full cache miss every Monday → 2100 stocks re-downloaded
-      # from scratch → ~45-60 min → race with 55-min timeout → silent failures.
-      # 14-day epoch changes every 2 weeks, so restore-keys always finds a recent
-      # cache from the prior period. Monday no longer causes a cold start.
-      - name: Get 14-day cache epoch
-        id: epoch
-        run: echo "epoch=$(( $(date -u +%s) / 1209600 ))" >> $GITHUB_OUTPUT
-
-      - name: Restore price cache
-        uses: actions/cache@v4
-        with:
-          path: price_cache.db
-          key: price-cache-${{ runner.os }}-e${{ steps.epoch.outputs.epoch }}-${{ github.run_number }}
-          restore-keys: |
-            price-cache-${{ runner.os }}-e${{ steps.epoch.outputs.epoch }}-
-            price-cache-${{ runner.os }}-
-
-      # IR1 FIX: signals.db uses stable key (not week-scoped) so outcome/expectancy
-      # data survives across cache key rotations. A named artifact upload also
-      # provides a secondary backup independent of GitHub Actions cache expiry.
-      - name: Restore signals DB
-        uses: actions/cache@v4
-        with:
-          path: signals.db
-          key: signals-db-${{ runner.os }}-stable
-          restore-keys: |
-            signals-db-${{ runner.os }}-
-
-      - name: EOD update (all stocks)
-        run: python data_updater.py --daily
-
-      - name: Sector update
-        run: python data_updater.py --sectors || true
-
-      - name: Run daily scan
-        env:
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        run: python scanner.py --daily --telegram
-
-      - name: Track signal outcomes
-        run: python scanner.py --outcomes || true
-
-      - name: Save price cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: price_cache.db
-          key: price-cache-${{ runner.os }}-e${{ steps.epoch.outputs.epoch }}-${{ github.run_number }}
-
-      # IR1 FIX: save signals.db with stable key so it persists across weeks
-      - name: Save signals DB
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: signals.db
-          key: signals-db-${{ runner.os }}-stable
-
-      - name: Commit watchlist
-        if: always()
-        run: |
-          git config user.name "NSE Scanner Bot"
-          git config user.email "scanner@noreply.github.com"
-          git add watchlist.json || true
-          git diff --staged --quiet || \
-            git commit -m "watchlist: $(date -u '+%Y-%m-%d %H:%M') [daily]"
-          git push || true
-
-      - name: Upload artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: daily-${{ github.run_number }}
-          path: |
-            output/
-            logs/
-            signals.db
-            watchlist.json
-          retention-days: 30
-          if-no-files-found: warn
-
-      # IR4 FIX: send Telegram alert if any step failed.
-      # Previously: job crash = silence. Traders assume no signals rather than
-      # "scanner is down". Now sends a diagnostic alert with run URL.
-      - name: Notify failure
-        if: failure()
-        run: |
-          MSG="🚨 NSE Scanner DAILY JOB FAILED%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}%0ATime: $(date -u '+%Y-%m-%d %H:%M UTC')%0ACheck logs — no scan results for this window."
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage" \
-            -d "chat_id=${{ secrets.TG_CHAT_ID }}" \
-            -d "text=${MSG}" \
-            -d "parse_mode=HTML" || true
-
-  # ════════════════════════════════════════════════════════════════════
-  # HALFHOUR — intraday update then quick-scan watchlist + top 300
-  # ════════════════════════════════════════════════════════════════════
-
-  halfhour:
-    if: |
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'halfhour') ||
-      (github.event_name == 'schedule' &&
-       github.event.schedule != '50 23 * * 0-4' &&
-       github.event.schedule != '20 4 * * 1-5' &&
-       github.event.schedule != '20 8 * * 1-5')
-
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: ${{ runner.os }}-pip-
-
-      - name: Install dependencies
-        run: pip install -q -r requirements.txt
-
-      - name: Get 14-day cache epoch
-        id: epoch
-        run: echo "epoch=$(( $(date -u +%s) / 1209600 ))" >> $GITHUB_OUTPUT
-
-      - name: Restore price cache
-        uses: actions/cache@v4
-        with:
-          path: price_cache.db
-          key: price-cache-${{ runner.os }}-e${{ steps.epoch.outputs.epoch }}-${{ github.run_number }}
-          restore-keys: |
-            price-cache-${{ runner.os }}-e${{ steps.epoch.outputs.epoch }}-
-            price-cache-${{ runner.os }}-
-
-      - name: Restore signals DB
-        uses: actions/cache@v4
-        with:
-          path: signals.db
-          key: signals-db-${{ runner.os }}-stable
-          restore-keys: |
-            signals-db-${{ runner.os }}-
-
-      - name: Intraday update (watchlist + top 300)
-        run: python data_updater.py --intraday
-
-      - name: Run halfhour scan
-        env:
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        run: |
-          if [ -n "${{ github.event.inputs.mode }}" ]; then
-            python scanner.py --halfhour --telegram --force
-          else
-            python scanner.py --halfhour --telegram
-          fi
-
-      - name: Save price cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: price_cache.db
-          key: price-cache-${{ runner.os }}-e${{ steps.epoch.outputs.epoch }}-${{ github.run_number }}
-
-      - name: Upload artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: halfhour-${{ github.run_number }}
-          path: |
-            output/
-            logs/
-          retention-days: 14
-          if-no-files-found: warn
-
-      # IR4 FIX: halfhour failure alert
-      - name: Notify failure
-        if: failure()
-        run: |
-          MSG="⚡ NSE Scanner HALFHOUR JOB FAILED%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}%0ATime: $(date -u '+%Y-%m-%d %H:%M UTC')"
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage" \
-            -d "chat_id=${{ secrets.TG_CHAT_ID }}" \
-            -d "text=${MSG}" || true
-
-  # ════════════════════════════════════════════════════════════════════
-  # TEST — 100 stocks, sends Telegram so you can verify output
-  # ════════════════════════════════════════════════════════════════════
-
-  test:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'test'
-
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: ${{ runner.os }}-pip-
-
-      - name: Install dependencies
-        run: pip install -q -r requirements.txt
-
-      - name: Get 14-day cache epoch
-        id: epoch
-        run: echo "epoch=$(( $(date -u +%s) / 1209600 ))" >> $GITHUB_OUTPUT
-
-      - name: Restore price cache
-        uses: actions/cache@v4
-        with:
-          path: price_cache.db
-          key: price-cache-${{ runner.os }}-e${{ steps.epoch.outputs.epoch }}-${{ github.run_number }}
-          restore-keys: |
-            price-cache-${{ runner.os }}-e${{ steps.epoch.outputs.epoch }}-
-            price-cache-${{ runner.os }}-
-
-      - name: Run test scan (100 stocks + Telegram)
-        env:
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        run: python scanner.py --test --telegram
-
-      - name: Save price cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: price_cache.db
-          key: price-cache-${{ runner.os }}-e${{ steps.epoch.outputs.epoch }}-${{ github.run_number }}
-
-      - name: Upload artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-${{ github.run_number }}
-          path: output/
-          retention-days: 7
-          if-no-files-found: warn
-
-  # ════════════════════════════════════════════════════════════════════
-  # BOOTSTRAP
-  # ════════════════════════════════════════════════════════════════════
-
-  bootstrap:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'bootstrap'
-
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: pip install -q -r requirements.txt
-
-      - name: Get 14-day cache epoch
-        id: epoch
-        run: echo "epoch=$(( $(date -u +%s) / 1209600 ))" >> $GITHUB_OUTPUT
-
-      - name: Bootstrap all stock history
-        run: python data_updater.py --bootstrap
-
-      - name: Save price cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: price_cache.db
-          key: price-cache-${{ runner.os }}-e${{ steps.epoch.outputs.epoch }}-bootstrap-${{ github.run_number }}
-
-      - name: Upload cache DB
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bootstrap-cache-${{ github.run_number }}
-          path: price_cache.db
-          retention-days: 7
-
-  # ════════════════════════════════════════════════════════════════════
-  # HEALTHCHECK
-  # ════════════════════════════════════════════════════════════════════
-
-  healthcheck:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'healthcheck'
-
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: pip install -q -r requirements.txt
-
-      - name: Healthcheck
-        env:
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        run: python scanner.py --healthcheck
-
-on:
-  schedule:
-    # ── DAILY FULL SCANS ──────────────────────────────────────────────────────
-    # Adjusted total 2h40m earlier to compensate GitHub Actions delay
-
-    # Original 08:00 AM IST
-    - cron: "50 23 * * 0-4"
-
-    # Original 12:30 PM IST
-    - cron: "20 4 * * 1-5"
-
-    # Original 04:30 PM IST
-    - cron: "20 8 * * 1-5"
-
-    # ── INTRADAY SCANS ────────────────────────────────────────────────────────
-
-    # Original 09:15 IST ← market open
-    - cron: "5 1 * * 1-5"
-
-    # Original 10:00 IST
-    - cron: "50 1 * * 1-5"
-
-    # Original 10:45 IST
-    - cron: "35 2 * * 1-5"
-
-    # Original 11:30 IST
-    - cron: "20 3 * * 1-5"
-
-    # Original 12:15 IST
-    - cron: "5 4 * * 1-5"
-
-    # Original 1:00 IST
-    - cron: "50 4 * * 1-5"
-
-    # Original 1:45 IST
-    - cron: "35 5 * * 1-5"
-
-    # Original 2:30 IST
-    - cron: "20 6 * * 1-5"
-
-    # Original 3:15 IST ← near close
-    - cron: "5 7 * * 1-5"
-
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: "Run mode"
-        required: true
-        type: choice
-        options: [daily, halfhour, test, healthcheck, bootstrap]
+        options: [daily, halfhour, test, healthcheck, bootstrap, fundamentals]
 
 permissions:
   contents: write
@@ -757,6 +349,68 @@ jobs:
           name: bootstrap-cache-${{ github.run_number }}
           path: price_cache.db
           retention-days: 7
+
+  # ════════════════════════════════════════════════════════════════════
+  # FUNDAMENTALS — manual only (run once a month / after results season)
+  # Piotroski + promoter/pledge for all stocks. ~60-90 min.
+  # Trigger: Actions → Run workflow → select "fundamentals"
+  # ════════════════════════════════════════════════════════════════════
+
+  fundamentals:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'fundamentals'
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -q -r requirements.txt
+
+      - name: Get week number
+        id: week
+        run: echo "week=$(date -u +%V)" >> $GITHUB_OUTPUT
+
+      - name: Restore price cache
+        uses: actions/cache@v4
+        with:
+          path: price_cache.db
+          key: price-cache-${{ runner.os }}-w${{ steps.week.outputs.week }}
+          restore-keys: |
+            price-cache-${{ runner.os }}-
+
+      - name: Run fundamentals prefetch
+        run: python data_updater.py --fundamentals
+
+      - name: Save price cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: price_cache.db
+          key: price-cache-${{ runner.os }}-w${{ steps.week.outputs.week }}-${{ github.run_number }}
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-${{ github.run_number }}
+          path: logs/
+          retention-days: 30
+          if-no-files-found: warn
 
   # ════════════════════════════════════════════════════════════════════
   # HEALTHCHECK
