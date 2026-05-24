@@ -43,10 +43,13 @@ BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 CACHE_PATH = os.path.join(BASE_DIR, "price_cache.db")
 
 # ── TTLs ──────────────────────────────────────────────────────────────────────
+# Fix 4: All screener/Piotroski/pledge data is quarterly at best — caching for
+# 7 days cuts ~1,900 screener.in requests on repeated daily runs to near-zero.
 TTL_BULK      = 0   # same-day only — fetched once per scan run
-TTL_PIO       = 7   # days — quarterly financials
+TTL_PIO       = 7   # days — annual financials (Piotroski); quarterly cadence is safe
 TTL_PLEDGE    = 7   # days — quarterly shareholding pattern
-TTL_NOT_FOUND = 30  # days — symbol confirmed missing on Yahoo; don't retry for a month
+TTL_SCREENER  = 7   # days — screener.in fund page (P/E, P/B, EPS growth, promoter %)
+TTL_NOT_FOUND = 30  # days — symbol confirmed missing; don't retry for a month
 
 # ── Cache DB (shared with scanner/data_updater) ───────────────────────────────
 _db_lock = Lock()
@@ -532,7 +535,7 @@ def _fetch_screener_pledge(sym: str) -> dict:
     Scrape promoter and pledge data from screener.in.
     Tries consolidated view first, then standalone.
     """
-    base = {"promoter_pct": 0.0, "pledge_pct": 0.0, "source": "unavailable"}
+    base = {"promoter_pct": None, "pledge_pct": None, "source": "unavailable"}  # HIGH-3: None not 0.0
     urls_to_try = [
         f"https://www.screener.in/company/{sym}/consolidated/",
         f"https://www.screener.in/company/{sym}/",
@@ -623,7 +626,7 @@ def _fetch_yf_pledge_proxy(sym: str) -> dict:
         if insider_pct is not None:
             return {
                 "promoter_pct": round(float(insider_pct) * 100, 2),
-                "pledge_pct": 0.0,   # unknown via yfinance
+                "pledge_pct": None,   # unknown via yfinance — HIGH-3: None not 0.0
                 "source": "yfinance_proxy",
             }
     except Exception:
@@ -842,9 +845,8 @@ def get_screener_fundamentals(sym: str) -> dict:
     """
     sym_clean = sym.upper().replace(".NS", "").replace(".BO", "").strip()
     cache_key = "screener_fund"
-    TTL = 7  # days
 
-    cached = _cache_read_ext(sym_clean, cache_key, TTL)
+    cached = _cache_read_ext(sym_clean, cache_key, TTL_SCREENER)  # Fix 4: 7-day TTL
     if cached is not None:
         return cached
 
@@ -870,6 +872,14 @@ def _scrape_screener(sym: str) -> dict:
         "current_ratio": None, "eps_ttm": None, "pe_ratio": None,
         "pb_ratio": None, "div_yield": None, "market_cap_cr": None,
         "quarterly_eps_growth": None, "face_value": None,
+        # C-2 ENHANCEMENT: raw EPS for last 5 quarters + YoY growth + acceleration
+        "eps_q1_raw": None, "eps_q2_raw": None, "eps_q3_raw": None,
+        "eps_q4_raw": None, "eps_q5_raw": None,
+        "eps_q1_yoy": None, "eps_q2_yoy": None, "eps_q3_yoy": None,
+        "eps_accelerating": None,
+        # C-3: revenue YoY for latest quarter (from quarterly table)
+        "rev_q1_raw": None, "rev_q5_raw": None,
+        "rev_q1_yoy": None,
         "_source": "unavailable",
     }
 
@@ -970,34 +980,69 @@ def _scrape_screener(sym: str) -> dict:
                     elif "roce" in label and result["roce"] is None:
                         result["roce"] = _pct(val)
 
-            # ── Quarterly Results — compute YoY EPS growth ───────────────────
-            # Table with id "quarters" or class "data-table" under quarterly section
+            # ── Quarterly Results — multi-quarter EPS + Revenue (C-2, C-3) ────
+            # Table with id "quarters". Columns: [label, Q1_latest, Q2, Q3, Q4, Q5_yoy...]
             qt = soup.find("table", id="quarters")
             if qt is None:
                 qt = soup.find("section", id="quarters")
                 if qt:
                     qt = qt.find("table")
             if qt:
-                eps_row = None
+                eps_row = sales_row = None
                 for tr in qt.find_all("tr"):
                     label = tr.find("td")
-                    if label and "eps" in label.get_text(strip=True).lower():
+                    if not label:
+                        continue
+                    lbl = label.get_text(strip=True).lower()
+                    if "eps" in lbl and eps_row is None:
                         eps_row = tr
-                        break
-                if eps_row:
-                    tds = [td.get_text(strip=True).replace(",", "") for td in eps_row.find_all("td")[1:]]
-                    # tds = [most_recent, Q-1, Q-2, Q-3, Q-4_ago, ...]
-                    # YoY growth = (tds[0] - tds[4]) / |tds[4]| * 100
+                    if ("sales" in lbl or "revenue" in lbl or "net sales" in lbl) and sales_row is None:
+                        sales_row = tr
+
+                def _safe_float(s):
                     try:
-                        if len(tds) >= 5:
-                            curr_eps = float(tds[0])
-                            yoy_eps  = float(tds[4])
-                            if yoy_eps != 0:
-                                result["quarterly_eps_growth"] = round(
-                                    (curr_eps - yoy_eps) / abs(yoy_eps) * 100, 2
-                                )
+                        return float(str(s).replace(",", "").strip())
                     except Exception:
-                        pass
+                        return None
+
+                # EPS multi-quarter parsing
+                if eps_row:
+                    tds = [td.get_text(strip=True) for td in eps_row.find_all("td")[1:]]
+                    eps_vals = [_safe_float(t) for t in tds[:8]]  # up to 8 quarters
+                    # Store raw Q1-Q5
+                    for i, key in enumerate(["eps_q1_raw","eps_q2_raw","eps_q3_raw","eps_q4_raw","eps_q5_raw"]):
+                        if i < len(eps_vals):
+                            result[key] = eps_vals[i]
+                    # YoY growth: Q1 vs Q5 (4 quarters back), Q2 vs Q6, Q3 vs Q7
+                    def _yoy_growth(curr, prior):
+                        if curr is None or prior is None or prior == 0:
+                            return None
+                        return round((curr - prior) / abs(prior) * 100, 2)
+                    if len(eps_vals) >= 5:
+                        result["quarterly_eps_growth"] = _yoy_growth(eps_vals[0], eps_vals[4])
+                        result["eps_q1_yoy"] = result["quarterly_eps_growth"]
+                    if len(eps_vals) >= 6:
+                        result["eps_q2_yoy"] = _yoy_growth(eps_vals[1], eps_vals[5])
+                    if len(eps_vals) >= 7:
+                        result["eps_q3_yoy"] = _yoy_growth(eps_vals[2], eps_vals[6])
+                    # C-2: acceleration = Q1_yoy > Q2_yoy > 0
+                    q1y = result.get("eps_q1_yoy")
+                    q2y = result.get("eps_q2_yoy")
+                    if q1y is not None and q2y is not None:
+                        result["eps_accelerating"] = 1 if (q1y > q2y > 0) else 0
+
+                # Revenue multi-quarter for C-3
+                if sales_row:
+                    tds = [td.get_text(strip=True) for td in sales_row.find_all("td")[1:]]
+                    rev_vals = [_safe_float(t) for t in tds[:8]]
+                    if len(rev_vals) >= 1:
+                        result["rev_q1_raw"] = rev_vals[0]
+                    if len(rev_vals) >= 5:
+                        result["rev_q5_raw"] = rev_vals[4]
+                        if rev_vals[4] and rev_vals[4] != 0 and rev_vals[0] is not None:
+                            result["rev_q1_yoy"] = round(
+                                (rev_vals[0] - rev_vals[4]) / abs(rev_vals[4]) * 100, 2
+                            )
 
             result["_source"] = "screener"
             log.debug(f"Screener {sym}: OK — ROE={result['roe']}% ROCE={result['roce']}% "
@@ -1051,7 +1096,11 @@ def enrich_fund_with_screener(sym: str, fund: dict) -> dict:
     for field in ("roe", "roce", "debt_equity", "current_ratio", "eps_ttm",
                   "pe_ratio", "div_yield", "market_cap_cr", "face_value",
                   "profit_growth_3yr", "profit_growth_5yr", "quarterly_eps_growth",
-                  "sales_growth_ttm"):
+                  "sales_growth_ttm",
+                  # C-2/C-3 ENHANCEMENT: multi-quarter EPS + revenue
+                  "eps_q1_raw", "eps_q2_raw", "eps_q3_raw", "eps_q4_raw", "eps_q5_raw",
+                  "eps_q1_yoy", "eps_q2_yoy", "eps_q3_yoy", "eps_accelerating",
+                  "rev_q1_raw", "rev_q5_raw", "rev_q1_yoy"):
         if scr.get(field) is not None:
             enriched[field] = scr[field]
 
