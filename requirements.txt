@@ -1,8 +1,20 @@
+# Core data
 yfinance>=0.2.40
 pandas>=2.0.0,<3.0.0
 numpy>=1.24.0,<2.0.0
 scipy>=1.10.0,<2.0.0
+
+# HTTP / scraping
 requests>=2.28.0,<3.0.0
+curl_cffi>=0.7.0          # yfinance session (crumb/cookie handling)
+beautifulsoup4>=4.12.0    # screener.in + NSE HTML scraping (fundamentals.py, market_data.py)
+lxml>=4.9.0               # faster BS4 parser (optional, falls back to html.parser)
+
+# Web UI
 flask>=3.0.0,<4.0.0
-curl_cffi>=0.7.0
-beautifulsoup4>=4.12.0
+
+# Scanner internal
+# (no additional deps — all standard library + above)
+
+# Dev / backtest
+# pytest>=7.0.0           # uncomment for testing
