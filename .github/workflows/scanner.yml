@@ -2,6 +2,10 @@ name: NSE Live Scanner v4.2
 
 on:
   schedule:
+    # ── WEEKLY FUNDAMENTALS ──────────────────────────────────────────────────────
+    # Original Sunday 6:00 PM IST = 12:30 UTC Sunday
+    - cron: "30 12 * * 0"
+
     # ── DAILY FULL SCANS ──────────────────────────────────────────────────────
     # Adjusted total 2h40m earlier to compensate GitHub Actions delay
 
@@ -49,7 +53,7 @@ on:
         description: "Run mode"
         required: true
         type: choice
-        options: [daily, halfhour, test, healthcheck, bootstrap]
+        options: [daily, halfhour, test, healthcheck, bootstrap, fundamentals]
 
 permissions:
   contents: write
@@ -349,6 +353,69 @@ jobs:
           name: bootstrap-cache-${{ github.run_number }}
           path: price_cache.db
           retention-days: 7
+
+  # ════════════════════════════════════════════════════════════════════
+  # WEEKLY FUNDAMENTALS — Piotroski + pledge for all 2144 stocks
+  # Runs Sunday 6 PM IST. Separate job so daily is never blocked/timed out.
+  # ════════════════════════════════════════════════════════════════════
+
+  fundamentals:
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'fundamentals') ||
+      github.event.schedule == '30 12 * * 0'
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -q -r requirements.txt
+
+      - name: Get week number
+        id: week
+        run: echo "week=$(date -u +%V)" >> $GITHUB_OUTPUT
+
+      - name: Restore price cache
+        uses: actions/cache@v4
+        with:
+          path: price_cache.db
+          key: price-cache-${{ runner.os }}-w${{ steps.week.outputs.week }}
+          restore-keys: |
+            price-cache-${{ runner.os }}-
+
+      - name: Run weekly fundamentals prefetch
+        run: python data_updater.py --fundamentals
+
+      - name: Save price cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: price_cache.db
+          key: price-cache-${{ runner.os }}-w${{ steps.week.outputs.week }}-${{ github.run_number }}
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fundamentals-${{ github.run_number }}
+          path: logs/
+          retention-days: 14
+          if-no-files-found: warn
 
   # ════════════════════════════════════════════════════════════════════
   # HEALTHCHECK
