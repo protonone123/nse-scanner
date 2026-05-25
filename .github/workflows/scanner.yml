@@ -2,11 +2,18 @@ name: NSE Live Scanner v5.0
 
 on:
   schedule:
-    # ── SINGLE DAILY RUN (post-close, after bhavcopy upload) ─────────────────
-    # NSE bhavcopy uploads ~6:00–6:30 PM IST. Run at 7:00 PM IST to be safe.
+    # ── DAILY FULL SCANS (3x per day, all on daily bars) ─────────────────────
     # GitHub Actions cron is UTC. IST = UTC+5:30.
-    # 7:00 PM IST = 13:30 UTC. Runs Mon–Fri.
-    - cron: "30 13 * * 1-5"
+    # Each cron is set ~10min early to absorb typical GHA queue delay.
+
+    # Pre-market  → 08:00 AM IST  (02:30 UTC = 50 23 Sun-Thu, fires Mon-Fri IST)
+    - cron: "50 23 * * 0-4"
+
+    # Mid-session → 12:30 PM IST  (07:00 UTC)
+    - cron: "20 4 * * 1-5"
+
+    # Post-close  → 04:30 PM IST  (11:00 UTC)
+    - cron: "20 8 * * 1-5"
 
   workflow_dispatch:
     inputs:
@@ -30,7 +37,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'daily')
 
     runs-on: ubuntu-latest
-    timeout-minutes: 45   # bhavcopy+resample ~1min, scan ~10min, plenty of headroom
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
@@ -72,9 +79,7 @@ jobs:
           restore-keys: |
             signals-db-${{ runner.os }}-
 
-      - name: EOD update via bhavcopy (1 HTTP call — all stocks)
-        # Downloads NSE sec_bhavdata_full CSV → writes 1d bars → resamples 1wk+1mo
-        # Falls back to yfinance batch automatically if NSE servers are down
+      - name: EOD update (all stocks)
         run: python data_updater.py --daily
 
       - name: Sector update
