@@ -41,6 +41,10 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
+class RateLimitExhausted(Exception):
+    """Raised by dl_batch when 429 persists after all DL_RETRIES. Outer loop handles wait+retry."""
+    pass
+
 # ================================================================
 # PATHS
 # ================================================================
@@ -336,9 +340,16 @@ def dl_batch(symbols: list[str], interval: str,
             msg = str(e)
             if "429" in msg or "rate limit" in msg.lower() or "too many" in msg.lower():
                 backoff = 90 * (attempt + 1)   # 90s → 180s → 270s
+                log.warning(f"⛔ dl_batch 429 attempt {attempt+1}/{DL_RETRIES} "
+                            f"({len(symbols)} syms) — backoff {backoff}s")
                 _set_rate_limit(backoff)
                 _reset_session()
                 _wait_if_rate_limited("batch_retry")
+                if attempt == DL_RETRIES - 1:
+                    # All retries exhausted on 429 — let outer loop handle longer wait
+                    raise RateLimitExhausted(
+                        f"{len(symbols)} syms {interval}: 429 after {DL_RETRIES} attempts"
+                    )
             elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
                 log.warning(f"401 batch attempt {attempt+1} — reset session")
                 _reset_session()
@@ -1011,26 +1022,45 @@ def run_eod_update(stocks: list[str]):
 
             for i in range(0, len(group_syms), BATCH_SIZE):
                 batch = group_syms[i : i + BATCH_SIZE]
-                try:
-                    if since_date:
-                        data = dl_batch(batch, tf, since_date=since_date)
-                    else:
-                        data = dl_batch(batch, tf, period=HISTORY[tf])
 
-                    for sym, df in data.items():
-                        try:
-                            n = write_cache(sym, tf, df)
-                            tf_ok += 1
-                            log.debug(f"{sym} {tf}: +{n} bars")
-                        except Exception as e:
-                            log.debug(f"{sym} {tf} write err: {e}")
-                            tf_err += 1
+                # Outer retry: catches RateLimitExhausted when dl_batch exhausts inner retries
+                # Waits 2min → 3min → 5min → gives up (probably all delisted/symbol error)
+                OUTER_WAITS = [120, 180, 300]  # seconds between outer retries
+                data = {}
+                for outer_attempt, wait_sec in enumerate([0] + OUTER_WAITS):
+                    if wait_sec > 0:
+                        log.warning(f"  ⛔ Batch {tf} outer retry {outer_attempt}/{len(OUTER_WAITS)} "
+                                    f"— waiting {wait_sec//60}min before retry...")
+                        _reset_session()
+                        time.sleep(wait_sec)
+                    try:
+                        if since_date:
+                            data = dl_batch(batch, tf, since_date=since_date)
+                        else:
+                            data = dl_batch(batch, tf, period=HISTORY[tf])
+                        break  # success — exit outer retry loop
+                    except RateLimitExhausted:
+                        if outer_attempt < len(OUTER_WAITS):
+                            continue  # go to next outer wait
+                        else:
+                            log.error(f"  ❌ Batch {tf} [{i}:{i+BATCH_SIZE}] "
+                                      f"gave up after {len(OUTER_WAITS)} outer retries — skipping")
+                            data = {}
+                    except Exception as e:
+                        log.warning(f"Batch {tf} {label} [{i}:{i+BATCH_SIZE}]: {e}")
+                        data = {}
+                        break
 
-                    tf_skip += len(batch) - len(data)
+                for sym, df in data.items():
+                    try:
+                        n = write_cache(sym, tf, df)
+                        tf_ok += 1
+                        log.debug(f"{sym} {tf}: +{n} bars")
+                    except Exception as e:
+                        log.debug(f"{sym} {tf} write err: {e}")
+                        tf_err += 1
 
-                except Exception as e:
-                    log.warning(f"Batch {tf} {label} [{i}:{i+BATCH_SIZE}]: {e}")
-                    tf_err += len(batch)
+                tf_skip += len(batch) - len(data)
 
                 # Progress log every 500 stocks processed
                 processed = i + len(batch)
