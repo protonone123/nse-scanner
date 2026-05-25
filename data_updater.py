@@ -84,6 +84,12 @@ BATCH_SIZE    = 50   # METHOD4: symbols per yfinance batch call (~43 calls vs 64
 MARKET_OPEN   = (9, 15)    # IST
 MARKET_CLOSE  = (15, 30)   # IST
 
+# NSE Bhavcopy — official EOD data, 1 HTTP call = all 2100+ stocks
+BHAVCOPY_URLS = [
+    "https://archives.nseindia.com/products/content/sec_bhavdata_full_{date}.csv",
+    "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{date}.csv",
+]
+
 # Timeframes to download
 TF_EOD      = ["1d", "1wk", "1mo"]
 TF_INTRADAY = ["15m", "1h"]
@@ -981,6 +987,208 @@ def run_gap_scan(stocks: list[str]) -> list[dict]:
 # ================================================================
 # BATCH RUNNERS
 # ================================================================
+# ================================================================
+# BHAVCOPY — NSE official EOD data (1 HTTP call = all stocks)
+# ================================================================
+def fetch_bhavcopy(trade_date=None) -> pd.DataFrame | None:
+    """
+    Download NSE sec_bhavdata_full CSV for given date.
+    Returns DataFrame[stock, open, high, low, close, volume] — EQ series only.
+    One HTTP call covers all 2100+ stocks. Zero rate-limit risk.
+    """
+    import requests as req
+    if trade_date is None:
+        trade_date = _today()
+    date_str = trade_date.strftime("%d%m%Y")
+
+    for url_tmpl in BHAVCOPY_URLS:
+        url = url_tmpl.format(date=date_str)
+        try:
+            resp = req.get(url, timeout=30,
+                           headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            resp.raise_for_status()
+            if len(resp.content) < 1000:   # empty / holiday file
+                continue
+            df = pd.read_csv(StringIO(resp.text))
+            df.columns = df.columns.str.strip()
+
+            # Filter EQ series only
+            series_col = next((c for c in df.columns if "SERIES" in c.upper()), None)
+            if series_col:
+                df = df[df[series_col].str.strip() == "EQ"]
+
+            # Normalise column names across NSE format versions
+            col_map = {
+                # symbol
+                "SYMBOL":      "symbol",
+                # OHLC
+                "OPEN":        "open",  "OPEN_PRICE":  "open",
+                "HIGH":        "high",  "HIGH_PRICE":  "high",
+                "LOW":         "low",   "LOW_PRICE":   "low",
+                "CLOSE":       "close", "CLOSE_PRICE": "close",
+                # volume
+                "TOTTRDQTY":   "volume", "TTL_TRD_QNTY": "volume",
+                "TOTAL_TRADES":"trades",
+            }
+            df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+
+            required = {"symbol", "open", "high", "low", "close"}
+            if not required.issubset(df.columns):
+                log.warning(f"Bhavcopy {date_str} missing cols: {df.columns.tolist()}")
+                continue
+
+            df["stock"]  = df["symbol"].str.strip() + ".NS"
+            df["volume"] = pd.to_numeric(df.get("volume", 0), errors="coerce").fillna(0)
+            for col in ("open", "high", "low", "close"):
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            df = df.dropna(subset=["open", "high", "low", "close"])
+
+            log.info(f"Bhavcopy {date_str}: {len(df)} EQ stocks (source: {url})")
+            return df[["stock", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
+
+        except Exception as e:
+            log.warning(f"Bhavcopy {url}: {e}")
+
+    return None
+
+
+def resample_weekly_monthly(stocks: list[str]):
+    """
+    Derive 1wk and 1mo bars from accumulated 1d cache.
+    Called after bhavcopy write so scanner gets all 3 EOD timeframes.
+    No yfinance calls needed.
+    """
+    ok_wk = ok_mo = err = 0
+    rules = [("1wk", "W-FRI"), ("1mo", "ME")]
+
+    for sym in stocks:
+        try:
+            df_1d = read_cache(sym, "1d", limit=9999)
+            if df_1d is None or len(df_1d) < 5:
+                continue
+            df_1d.index = pd.to_datetime(df_1d.index)
+
+            for tf, rule in rules:
+                try:
+                    resampled = df_1d.resample(rule, label="left", closed="left").agg({
+                        "Open": "first", "High": "max",
+                        "Low":  "min",   "Close": "last",
+                        "Volume": "sum",
+                    }).dropna(subset=["Close"])
+                    if len(resampled) == 0:
+                        continue
+                    # Incremental: only write bars newer than what's stored
+                    last_stored = get_last_date(sym, tf)
+                    if last_stored:
+                        cutoff = pd.Timestamp(last_stored) - timedelta(days=40)
+                        resampled = resampled[resampled.index >= cutoff]
+                    if len(resampled) == 0:
+                        continue
+                    write_cache(sym, tf, resampled)
+                    if tf == "1wk": ok_wk += 1
+                    else:           ok_mo += 1
+                except Exception as e:
+                    log.debug(f"Resample {sym} {tf}: {e}")
+                    err += 1
+        except Exception as e:
+            log.debug(f"resample_weekly_monthly {sym}: {e}")
+            err += 1
+
+    log.info(f"Resample done: 1wk={ok_wk} 1mo={ok_mo} err={err}")
+
+
+def run_daily_bhavcopy(stocks: list[str]):
+    """
+    Daily EOD update via NSE Bhavcopy.
+
+    Flow:
+      1. Try today's bhavcopy → walk back up to 4 trading days (handles holidays)
+      2. Bulk-write 1d bars to cache (single DB transaction)
+      3. Resample 1wk + 1mo from accumulated 1d cache (no yfinance)
+      4. Fallback: yfinance batch if bhavcopy unavailable
+
+    HTTP calls: 1 (vs 6429 individual or ~129 batch yfinance calls).
+    Rate-limit risk: zero for steps 1-3.
+    """
+    log.info(f"=== Daily update via NSE Bhavcopy {_ist()} ===")
+    t0 = time.time()
+
+    # Step 1: find most recent available bhavcopy
+    bhav_df   = None
+    bhav_date = None
+    for days_back in range(6):
+        check_date = _today() - timedelta(days=days_back)
+        if check_date.weekday() >= 5:   # skip Sat/Sun
+            continue
+        bhav_df = fetch_bhavcopy(check_date)
+        if bhav_df is not None:
+            bhav_date = check_date
+            break
+
+    if bhav_df is None:
+        log.error("Bhavcopy unavailable for last 6 days — falling back to yfinance batch")
+        run_eod_update(stocks)
+        return
+
+    date_str = str(bhav_date)
+    log.info(f"Writing {len(bhav_df)} stocks for {date_str}...")
+
+    # Step 2: bulk-write 1d bars
+    rows_to_insert = []
+    already_current = 0
+
+    # Build a set of stocks we track for fast lookup
+    tracked = set(stocks)
+
+    for _, row in bhav_df.iterrows():
+        sym = row["stock"]
+        if sym not in tracked:
+            continue                        # not in our universe
+        last = get_last_date(sym, "1d")
+        if last and last[:10] >= date_str:
+            already_current += 1
+            continue                        # already have today's bar
+        rows_to_insert.append((
+            sym, "1d", date_str,
+            float(row["open"]), float(row["high"]),
+            float(row["low"]),  float(row["close"]),
+            float(row["volume"]),
+        ))
+
+    written = 0
+    if rows_to_insert:
+        con = _get_db()
+        with _db_lock:
+            con.executemany(
+                "INSERT OR REPLACE INTO price_cache "
+                "(stock,tf,date,open,high,low,close,volume) VALUES (?,?,?,?,?,?,?,?)",
+                rows_to_insert,
+            )
+            # Update cache_meta for written stocks
+            for r in rows_to_insert:
+                sym = r[0]
+                bar_count = con.execute(
+                    "SELECT COUNT(*) FROM price_cache WHERE stock=? AND tf='1d'", (sym,)
+                ).fetchone()[0]
+                con.execute(
+                    "INSERT OR REPLACE INTO cache_meta "
+                    "(stock,tf,last_date,last_updated,bar_count) VALUES (?,?,?,?,?)",
+                    (sym, "1d", date_str, str(_today()), bar_count),
+                )
+            con.commit()
+        written = len(rows_to_insert)
+
+    log.info(f"1d: wrote={written} already_current={already_current} "
+             f"not_in_universe={len(bhav_df)-written-already_current} "
+             f"| {time.time()-t0:.1f}s")
+
+    # Step 3: resample 1wk + 1mo (no yfinance needed)
+    log.info("Resampling 1wk + 1mo from 1d cache...")
+    resample_weekly_monthly(stocks)
+
+    log.info(f"Daily bhavcopy complete: {time.time()-t0:.1f}s")
+
+
 def run_eod_update(stocks: list[str]):
     """
     Update 1d/1wk/1mo for all stocks using METHOD4 batch downloads.
@@ -1290,9 +1498,8 @@ def main():
     if args.daily:
         log.info(f"=== Daily EOD update {_ist()} ===")
         stocks = load_universe()
-        run_eod_update(stocks)
+        run_daily_bhavcopy(stocks)   # 1 HTTP call vs 6429; yfinance fallback if unavailable
         update_sectors()
-        # Fundamentals fetch disabled (avoids 401 rate limiting)
         return
 
     if args.bootstrap:
