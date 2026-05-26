@@ -12,8 +12,8 @@ on:
     # Mid-session → 12:30 PM IST  (07:00 UTC)
     - cron: "20 4 * * 1-5"
 
-    # Post-close  → 04:30 PM IST  (11:00 UTC)
-    - cron: "20 8 * * 1-5"
+    # Post-close  → 04:00 PM IST  (10:30 UTC) — market closes at 3:30 PM IST
+    - cron: "0 10 * * 1-5"
 
   workflow_dispatch:
     inputs:
