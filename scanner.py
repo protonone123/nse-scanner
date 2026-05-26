@@ -87,10 +87,11 @@ Usage:
   python scanner.py --outcomes   # manual outcome summary (also runs automatically)
 """
 
-import os, sys, json, time, sqlite3, argparse, logging
+import os, sys, json, time, sqlite3, argparse, logging, io
 from datetime import date, datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
+import contextlib
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -844,6 +845,22 @@ def _normalize_df_index(df: pd.DataFrame) -> pd.DataFrame:
             pass   # best effort — return as-is
     return df
 
+def _is_rate_limit_output(text: str) -> bool:
+    """
+    Detect yfinance's silently-swallowed YFRateLimitError.
+    yfinance catches the error internally, logs it to stderr, and returns
+    an empty DataFrame instead of raising — so our try/except never sees it.
+    We capture stderr during the download and check for these signatures.
+    """
+    t = text.lower()
+    return (
+        "yfrarelimiterror" in t
+        or "yfratelimiterror" in t
+        or "429" in t
+        or ("rate" in t and "limit" in t)
+        or "too many requests" in t
+    )
+
 def dl(sym, interval="1d", period=PERIOD_DAILY):
     for attempt in range(DL_RETRIES):
         # Block here until the global rate-limit window clears.
@@ -852,13 +869,36 @@ def dl(sym, interval="1d", period=PERIOD_DAILY):
         try:
             sess = _get_session()
             kw = {"session": sess} if sess is not None else {}
-            df = yf.download(sym, period=period, interval=interval,
-                             auto_adjust=True, progress=False, timeout=20, **kw)
+
+            # ── RATE-LIMIT FIX ────────────────────────────────────────────────
+            # yfinance swallows YFRateLimitError internally: it catches the
+            # exception, prints it to stderr, and returns an empty DataFrame.
+            # Our try/except never fires — we just get an empty df → treated
+            # as a skip. Fix: capture stderr/stdout during the download call
+            # and check for rate-limit signatures if the df comes back empty.
+            captured = io.StringIO()
+            with contextlib.redirect_stderr(captured), \
+                 contextlib.redirect_stdout(captured):
+                df = yf.download(sym, period=period, interval=interval,
+                                 auto_adjust=True, progress=False, timeout=20, **kw)
+
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             # CRASH FIX: normalize index before dropna — avoids ISO timestamp crash
             df = _normalize_df_index(df)
             df = df.dropna()
+
+            # If we got an empty result, check whether yfinance silently ate a
+            # rate-limit error and raise a synthetic exception so the handler
+            # below applies the same backoff logic as a real 429.
+            if df.empty or len(df) <= 20:
+                output = captured.getvalue()
+                if _is_rate_limit_output(output):
+                    log.warning(f"yfinance swallowed rate-limit on {sym} "
+                                f"(attempt {attempt+1}) — captured: "
+                                f"{output.strip()[:120]}")
+                    raise Exception("429 rate limit detected in yfinance output")
+
             return df if len(df) > 20 else None
         except Exception as e:
             msg = str(e)
