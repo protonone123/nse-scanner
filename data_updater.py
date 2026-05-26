@@ -73,9 +73,13 @@ def _now():  return datetime.now(_IST)
 def _today(): return _now().date()
 def _ist(fmt="%H:%M IST"): return _now().strftime(fmt)
 
-MAX_WORKERS   = 5    # FIX: was 10 — too aggressive, causes YFRateLimitError on CI
-DL_RETRIES    = 3
+MAX_WORKERS   = 3    # Conservative — fewer parallel requests = fewer 429s
+DL_RETRIES    = 3    # Retries for non-rate-limit errors (delisted, timeout, etc.)
 DL_BACKOFF    = 3.0
+# Rate-limit specific: unlimited retries with escalating backoff
+RL_BACKOFF_BASE  = 60    # First RL hit: wait 60s before retry
+RL_BACKOFF_MAX   = 300   # Cap per-attempt backoff at 5 minutes
+RL_MAX_ATTEMPTS  = 20    # Give up a stock after 20 consecutive RL hits (~sum of backoffs)
 MARKET_OPEN   = (9, 15)    # IST
 MARKET_CLOSE  = (15, 30)   # IST
 
@@ -189,85 +193,140 @@ def _normalize_df_index(df: pd.DataFrame) -> pd.DataFrame:
             pass
     return df
 
+def _is_rate_limit_error(msg: str) -> bool:
+    return ("429" in msg or "rate limit" in msg.lower() or
+            "too many" in msg.lower() or "rateLimitExceeded" in msg.lower())
+
 def dl(sym: str, interval: str = "1d", period: str = "1y") -> pd.DataFrame | None:
-    for attempt in range(DL_RETRIES):
+    """Download with unlimited rate-limit retries and bounded non-RL retries.
+
+    Rate-limit errors (429 / Too Many Requests):
+      - Global circuit breaker pauses ALL worker threads.
+      - This stock is retried indefinitely (up to RL_MAX_ATTEMPTS) after each pause.
+      - Backoff escalates: 60s, 90s, 120s … capped at RL_BACKOFF_MAX.
+      - Stock is NEVER skipped due to rate limiting alone.
+
+    Other errors (401, timeout, bad data, delisted):
+      - Retried up to DL_RETRIES times with normal backoff.
+      - Delisted / no-data → skip immediately (no point retrying).
+    """
+    import contextlib, io as _io
+    non_rl_attempts = 0
+    rl_attempts = 0
+
+    while True:
         # Block here until the global rate-limit window clears.
-        # All 5 parallel workers pause here — no flood while banned.
         _wait_if_rate_limited(sym)
         try:
             sess = _get_session()
             kw = {"session": sess} if sess else {}
-            import contextlib, io as _io
-            with contextlib.redirect_stderr(_io.StringIO()):  # suppress yfinance delisted noise
+            with contextlib.redirect_stderr(_io.StringIO()):
                 df = yf.download(sym, period=period, interval=interval,
                                  auto_adjust=True, progress=False, timeout=25, **kw)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
-            df = _normalize_df_index(df)   # CRASH FIX: handles ISO 8601 timestamps
+            df = _normalize_df_index(df)
             df = df.dropna()
             return df if len(df) > 0 else None
+
         except Exception as e:
             msg = str(e)
-            if "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
-                log.debug(f"ISO timestamp error {sym} attempt {attempt+1} — reset")
-                _reset_session(); time.sleep(3 * (attempt + 1))
-            elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
-                log.warning(f"401 {sym} attempt {attempt+1} — reset session")
-                _reset_session(); time.sleep(8)
-            elif "429" in msg or "rate limit" in msg.lower() or "too many" in msg.lower():
-                # Escalating global pause: 60s → 120s → 180s
-                # Setting this freezes ALL worker threads at the gate above.
-                backoff = 60 * (attempt + 1)
+
+            if _is_rate_limit_error(msg):
+                rl_attempts += 1
+                if rl_attempts > RL_MAX_ATTEMPTS:
+                    log.error(f"⛔ {sym} {interval}: gave up after {rl_attempts} RL hits")
+                    return None
+                # Escalating backoff: 60, 90, 120 … capped at RL_BACKOFF_MAX
+                backoff = min(RL_BACKOFF_BASE + (rl_attempts - 1) * 30, RL_BACKOFF_MAX)
                 _set_rate_limit(backoff)
-                # This thread also waits (gate will be open when we loop back)
-                _wait_if_rate_limited(sym)
+                log.info(f"  🔄 [{sym}] RL hit #{rl_attempts} — will retry after {backoff}s pause")
+                # _wait_if_rate_limited at top of loop handles the actual sleep
+                continue   # ← retry this stock, no skip
+
+            elif "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
+                non_rl_attempts += 1
+                log.debug(f"ISO timestamp error {sym} attempt {non_rl_attempts} — reset")
+                _reset_session(); time.sleep(3 * non_rl_attempts)
+
+            elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
+                non_rl_attempts += 1
+                log.warning(f"401 {sym} attempt {non_rl_attempts} — reset session")
+                _reset_session(); time.sleep(8)
+
             elif "delisted" in msg.lower() or "no price data" in msg.lower():
                 log.debug(f"Skip {sym} {interval}: delisted/no data")
-                return None  # don't retry delisted stocks
-            elif attempt < DL_RETRIES - 1:
-                time.sleep(DL_BACKOFF * (attempt + 1))
-    return None
+                return None   # no retry — symbol doesn't exist
+
+            else:
+                non_rl_attempts += 1
+                if non_rl_attempts < DL_RETRIES:
+                    time.sleep(DL_BACKOFF * non_rl_attempts)
+
+            if non_rl_attempts >= DL_RETRIES:
+                log.debug(f"Skip {sym} {interval}: {DL_RETRIES} non-RL errors")
+                return None
 
 def dl_since(sym: str, interval: str, since_date: str) -> pd.DataFrame | None:
     """Download bars only since a given date. Uses yfinance start parameter.
-    BUG7 FIX: was missing 429/rate-limit handling — a single 429 during incremental
-    update would silently return None, corrupting the cache for that stock.
-    Now uses the global circuit breaker so all workers pause together.
+    Same rate-limit retry logic as dl(): unlimited retries on 429, bounded retries
+    on other errors, delisted symbols skipped immediately.
     """
-    for attempt in range(DL_RETRIES):
-        # Block here until the global rate-limit window clears.
+    import contextlib, io as _io
+    non_rl_attempts = 0
+    rl_attempts = 0
+
+    while True:
         _wait_if_rate_limited(sym)
         try:
             sess = _get_session()
             kw = {"session": sess} if sess else {}
-            import contextlib, io as _io
             with contextlib.redirect_stderr(_io.StringIO()):
                 df = yf.download(sym, start=since_date, interval=interval,
                                  auto_adjust=True, progress=False, timeout=25, **kw)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
-            df = _normalize_df_index(df)   # CRASH FIX: ISO timestamp normalization
+            df = _normalize_df_index(df)
             df = df.dropna()
             return df if len(df) > 0 else None
+
         except Exception as e:
             msg = str(e)
-            if "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
-                log.debug(f"ISO timestamp error {sym} dl_since attempt {attempt+1}")
-                _reset_session(); time.sleep(3 * (attempt + 1))
-            elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
-                log.warning(f"401 {sym} dl_since attempt {attempt+1} — reset session")
-                _reset_session(); time.sleep(8)
-            elif "429" in msg or "rate limit" in msg.lower() or "too many" in msg.lower():
-                # Same escalating global pause as dl(): 60s → 120s → 180s
-                backoff = 60 * (attempt + 1)
+
+            if _is_rate_limit_error(msg):
+                rl_attempts += 1
+                if rl_attempts > RL_MAX_ATTEMPTS:
+                    log.error(f"⛔ {sym} {interval} dl_since: gave up after {rl_attempts} RL hits")
+                    return None
+                backoff = min(RL_BACKOFF_BASE + (rl_attempts - 1) * 30, RL_BACKOFF_MAX)
                 _set_rate_limit(backoff)
-                _wait_if_rate_limited(sym)
+                log.info(f"  🔄 [{sym}] dl_since RL hit #{rl_attempts} — will retry after {backoff}s pause")
+                continue   # retry, do NOT skip
+
+            elif "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
+                non_rl_attempts += 1
+                log.debug(f"ISO timestamp error {sym} dl_since attempt {non_rl_attempts}")
+                _reset_session(); time.sleep(3 * non_rl_attempts)
+
+            elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
+                non_rl_attempts += 1
+                log.warning(f"401 {sym} dl_since attempt {non_rl_attempts} — reset session")
+                _reset_session(); time.sleep(8)
+
             elif "delisted" in msg.lower() or "no price data" in msg.lower():
                 log.debug(f"Skip {sym} {interval}: delisted/no data")
                 return None
-            elif attempt < DL_RETRIES - 1:
-                time.sleep(DL_BACKOFF * (attempt + 1))
-    return None
+
+            else:
+                non_rl_attempts += 1
+                if non_rl_attempts < DL_RETRIES:
+                    time.sleep(DL_BACKOFF * non_rl_attempts)
+
+            if non_rl_attempts >= DL_RETRIES:
+                log.debug(f"Skip {sym} {interval} dl_since: {DL_RETRIES} non-RL errors")
+                return None
+
+
 
 # ================================================================
 # UNIVERSE
@@ -1129,6 +1188,14 @@ def main():
         return
 
     if args.daily:
+        now_ist = _now()
+        close_h, close_m = MARKET_CLOSE
+        if (now_ist.hour, now_ist.minute) < (close_h, close_m):
+            log.warning(
+                f"⚠️  --daily triggered at {_ist()} — market hasn't closed yet "
+                f"(closes {close_h:02d}:{close_m:02d} IST). "
+                "Today's last candle won't be final. Proceeding anyway..."
+            )
         log.info(f"=== Daily EOD update {_ist()} ===")
         stocks = load_universe()
         run_eod_update(stocks)
