@@ -220,9 +220,14 @@ def dl(sym: str, interval: str = "1d", period: str = "1y") -> pd.DataFrame | Non
         try:
             sess = _get_session()
             kw = {"session": sess} if sess else {}
-            with contextlib.redirect_stderr(_io.StringIO()):
+            _stderr_capture = _io.StringIO()
+            with contextlib.redirect_stderr(_stderr_capture):
                 df = yf.download(sym, period=period, interval=interval,
                                  auto_adjust=True, progress=False, timeout=25, **kw)
+            # Check if yfinance printed a rate-limit error to stderr
+            _captured = _stderr_capture.getvalue()
+            if _is_rate_limit_error(_captured):
+                raise Exception(f"429 rate limit detected in stderr: {_captured[:200]}")
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             df = _normalize_df_index(df)
@@ -281,9 +286,14 @@ def dl_since(sym: str, interval: str, since_date: str) -> pd.DataFrame | None:
         try:
             sess = _get_session()
             kw = {"session": sess} if sess else {}
-            with contextlib.redirect_stderr(_io.StringIO()):
+            _stderr_capture = _io.StringIO()
+            with contextlib.redirect_stderr(_stderr_capture):
                 df = yf.download(sym, start=since_date, interval=interval,
                                  auto_adjust=True, progress=False, timeout=25, **kw)
+            # Check if yfinance printed a rate-limit error to stderr
+            _captured = _stderr_capture.getvalue()
+            if _is_rate_limit_error(_captured):
+                raise Exception(f"429 rate limit detected in stderr: {_captured[:200]}")
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             df = _normalize_df_index(df)
