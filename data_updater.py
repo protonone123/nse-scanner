@@ -73,13 +73,13 @@ def _now():  return datetime.now(_IST)
 def _today(): return _now().date()
 def _ist(fmt="%H:%M IST"): return _now().strftime(fmt)
 
-MAX_WORKERS   = 3    # Conservative — fewer parallel requests = fewer 429s
+MAX_WORKERS   = 1    # Serial downloads: no parallel requests = no rate-limit storms
 DL_RETRIES    = 3    # Retries for non-rate-limit errors (delisted, timeout, etc.)
 DL_BACKOFF    = 3.0
 # Rate-limit specific: unlimited retries with escalating backoff
-RL_BACKOFF_BASE  = 60    # First RL hit: wait 60s before retry
+RL_BACKOFF_BASE  = 120   # First RL hit: wait 2 min before retry (Yahoo window is ~2min)
 RL_BACKOFF_MAX   = 300   # Cap per-attempt backoff at 5 minutes
-RL_MAX_ATTEMPTS  = 20    # Give up a stock after 20 consecutive RL hits (~sum of backoffs)
+RL_MAX_ATTEMPTS  = 10    # Give up a stock after 10 consecutive RL hits
 MARKET_OPEN   = (9, 15)    # IST
 MARKET_CLOSE  = (15, 30)   # IST
 
@@ -151,30 +151,51 @@ def _reset_session():
 # ================================================================
 # GLOBAL RATE-LIMIT CIRCUIT BREAKER
 # ================================================================
-# When ANY worker thread hits a 429, it calls _set_rate_limit().
-# ALL threads then block in _wait_if_rate_limited() before their
-# next request. This stops the flood of parallel requests that
-# would otherwise keep triggering the rate limit repeatedly.
+# When a thread hits a 429, it calls _set_rate_limit(seconds).
+# This CLOSES the _RL_EVENT gate — all threads block on .wait()
+# before making the next yf.download() call. No more concurrent
+# requests pile up during the cooldown window.
+#
+# Design:
+#   _RL_EVENT.set()   → gate OPEN  (normal operation)
+#   _RL_EVENT.clear() → gate CLOSED (rate-limit cooldown active)
+# Threads call _wait_if_rate_limited() right before every download.
+
+import threading as _threading
 
 _RL_LOCK  = Lock()
-_RL_UNTIL = 0.0   # epoch seconds; 0 = no limit active
+_RL_UNTIL = 0.0                         # epoch seconds when ban lifts
+_RL_EVENT = _threading.Event()
+_RL_EVENT.set()                         # start with gate open
 
 def _set_rate_limit(seconds: int):
-    """Set (or extend) the global rate-limit pause window."""
+    """Close the download gate and schedule it to reopen after `seconds`."""
     global _RL_UNTIL
     with _RL_LOCK:
         new_until = time.time() + seconds
-        if new_until > _RL_UNTIL:
-            _RL_UNTIL = new_until
-            log.warning(f"⛔ Rate limit — ALL workers paused for {seconds}s "
-                        f"(until {time.strftime('%H:%M:%S', time.localtime(new_until))})")
+        if new_until <= _RL_UNTIL:
+            return   # a longer pause is already scheduled — don't shorten it
+        _RL_UNTIL = new_until
+        _RL_EVENT.clear()               # CLOSE gate — all threads will block
+        log.warning(f"⛔ Rate limit — download gate CLOSED for {seconds}s "
+                    f"(reopens at {time.strftime('%H:%M:%S', time.localtime(new_until))})")
+
+    def _reopen():
+        time.sleep(seconds + 1.0)       # +1s safety buffer after window
+        with _RL_LOCK:
+            if time.time() >= _RL_UNTIL - 1:
+                _RL_EVENT.set()         # OPEN gate
+                log.info("✅ Rate-limit window expired — downloads resuming")
+
+    _threading.Thread(target=_reopen, daemon=True).start()
 
 def _wait_if_rate_limited(caller: str = ""):
-    """Block the calling thread until the global rate-limit window expires."""
-    remaining = _RL_UNTIL - time.time()
-    if remaining > 0:
-        log.info(f"  ⏳ [{caller}] rate-limit gate — waiting {remaining:.0f}s")
-        time.sleep(remaining + 0.5)   # +0.5s buffer after window clears
+    """Block the calling thread until the rate-limit gate is open."""
+    if _RL_EVENT.is_set():
+        return   # fast path — no rate limit active
+    remaining = max(0.0, _RL_UNTIL - time.time())
+    log.info(f"  ⏳ [{caller}] download gate CLOSED — blocking for ~{remaining:.0f}s")
+    _RL_EVENT.wait()                    # true block (no CPU spin)
 
 # ================================================================
 # DOWNLOAD
@@ -215,12 +236,16 @@ def dl(sym: str, interval: str = "1d", period: str = "1y") -> pd.DataFrame | Non
     rl_attempts = 0
 
     while True:
-        # Block here until the global rate-limit window clears.
+        # Block here until the global rate-limit gate is open.
         _wait_if_rate_limited(sym)
         try:
             sess = _get_session()
             kw = {"session": sess} if sess else {}
             _stderr_capture = _io.StringIO()
+            # Second gate check right before the actual network call.
+            # Needed because another thread could have set the rate limit
+            # between the top-of-loop check and this point.
+            _wait_if_rate_limited(sym)
             with contextlib.redirect_stderr(_stderr_capture):
                 df = yf.download(sym, period=period, interval=interval,
                                  auto_adjust=True, progress=False, timeout=25, **kw)
@@ -242,11 +267,11 @@ def dl(sym: str, interval: str = "1d", period: str = "1y") -> pd.DataFrame | Non
                 if rl_attempts > RL_MAX_ATTEMPTS:
                     log.error(f"⛔ {sym} {interval}: gave up after {rl_attempts} RL hits")
                     return None
-                # Escalating backoff: 60, 90, 120 … capped at RL_BACKOFF_MAX
+                # Escalating backoff: 120s, 150s, 180s … capped at RL_BACKOFF_MAX
                 backoff = min(RL_BACKOFF_BASE + (rl_attempts - 1) * 30, RL_BACKOFF_MAX)
                 _set_rate_limit(backoff)
-                log.info(f"  🔄 [{sym}] RL hit #{rl_attempts} — will retry after {backoff}s pause")
-                # _wait_if_rate_limited at top of loop handles the actual sleep
+                log.info(f"  🔄 [{sym}] RL hit #{rl_attempts} — gate closed for {backoff}s, will retry same stock")
+                # _wait_if_rate_limited at top of loop handles the actual block
                 continue   # ← retry this stock, no skip
 
             elif "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
@@ -287,6 +312,8 @@ def dl_since(sym: str, interval: str, since_date: str) -> pd.DataFrame | None:
             sess = _get_session()
             kw = {"session": sess} if sess else {}
             _stderr_capture = _io.StringIO()
+            # Second gate check right before the actual network call.
+            _wait_if_rate_limited(sym)
             with contextlib.redirect_stderr(_stderr_capture):
                 df = yf.download(sym, start=since_date, interval=interval,
                                  auto_adjust=True, progress=False, timeout=25, **kw)
@@ -310,8 +337,7 @@ def dl_since(sym: str, interval: str, since_date: str) -> pd.DataFrame | None:
                     return None
                 backoff = min(RL_BACKOFF_BASE + (rl_attempts - 1) * 30, RL_BACKOFF_MAX)
                 _set_rate_limit(backoff)
-                log.info(f"  🔄 [{sym}] dl_since RL hit #{rl_attempts} — will retry after {backoff}s pause")
-                continue   # retry, do NOT skip
+                log.info(f"  🔄 [{sym}] dl_since RL hit #{rl_attempts} — gate closed for {backoff}s, will retry same stock")
 
             elif "unconverted data remains" in msg or ("T0" in msg and "+" in msg):
                 non_rl_attempts += 1
