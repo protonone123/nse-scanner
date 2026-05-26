@@ -29,7 +29,7 @@ Usage:
   python data_updater.py --sectors            # run with --daily
 """
 
-import os, sys, json, time, sqlite3, argparse, logging, random
+import os, sys, json, time, sqlite3, argparse, logging
 from datetime import date, datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -73,10 +73,9 @@ def _now():  return datetime.now(_IST)
 def _today(): return _now().date()
 def _ist(fmt="%H:%M IST"): return _now().strftime(fmt)
 
-MAX_WORKERS   = 3    # METHOD2: reduced from 5 — less concurrent pressure on Yahoo
+MAX_WORKERS   = 5    # FIX: was 10 — too aggressive, causes YFRateLimitError on CI
 DL_RETRIES    = 3
 DL_BACKOFF    = 3.0
-BATCH_SIZE    = 50   # METHOD4: symbols per yfinance batch call (~43 calls vs 6429)
 MARKET_OPEN   = (9, 15)    # IST
 MARKET_CLOSE  = (15, 30)   # IST
 
@@ -172,8 +171,6 @@ def _wait_if_rate_limited(caller: str = ""):
     if remaining > 0:
         log.info(f"  ⏳ [{caller}] rate-limit gate — waiting {remaining:.0f}s")
         time.sleep(remaining + 0.5)   # +0.5s buffer after window clears
-    # METHOD2: always add jitter — breaks machine-like cadence Yahoo fingerprints
-    time.sleep(random.uniform(0.3, 1.2))
 
 # ================================================================
 # DOWNLOAD
@@ -273,84 +270,8 @@ def dl_since(sym: str, interval: str, since_date: str) -> pd.DataFrame | None:
     return None
 
 # ================================================================
-# BATCH DOWNLOAD — METHOD4: multiple symbols in one HTTP call
+# UNIVERSE
 # ================================================================
-def dl_batch(symbols: list[str], interval: str,
-             period: str = None, since_date: str = None) -> dict[str, pd.DataFrame]:
-    """
-    Download up to BATCH_SIZE symbols in a single yfinance HTTP call.
-    Returns {sym: DataFrame}. Cuts ~6429 requests down to ~43 for EOD.
-
-    Args:
-        symbols:    list of ticker strings (e.g. ["RELIANCE.NS", "TCS.NS"])
-        interval:   yfinance interval ("1d", "1wk", "1mo", "1h", "15m")
-        period:     yfinance period string ("10y", "2y" …)  — use OR since_date
-        since_date: ISO date string "YYYY-MM-DD"             — use OR period
-    """
-    for attempt in range(DL_RETRIES):
-        _wait_if_rate_limited("batch")
-        try:
-            sess = _get_session()
-            kw   = {"session": sess} if sess else {}
-            dl_kw = dict(auto_adjust=True, progress=False,
-                         timeout=90, group_by="ticker", **kw)
-            if since_date:
-                dl_kw["start"] = since_date
-            else:
-                dl_kw["period"] = period
-
-            import contextlib, io as _io
-            with contextlib.redirect_stderr(_io.StringIO()):
-                raw = yf.download(symbols, interval=interval, **dl_kw)
-
-            if raw is None or len(raw) == 0:
-                return {}
-
-            results: dict[str, pd.DataFrame] = {}
-
-            if isinstance(raw.columns, pd.MultiIndex):
-                # Normal multi-ticker result: (OHLCV, ticker) MultiIndex columns
-                available = raw.columns.get_level_values(1).unique().tolist()
-                for sym in symbols:
-                    if sym not in available:
-                        continue
-                    try:
-                        sym_df = raw.xs(sym, axis=1, level=1).copy()
-                        sym_df = sym_df.dropna(how="all")
-                        sym_df = _normalize_df_index(sym_df)
-                        sym_df = sym_df.dropna()
-                        if len(sym_df) > 0:
-                            results[sym] = sym_df
-                    except Exception:
-                        pass
-            else:
-                # yfinance collapses to flat df when only 1 ticker has data
-                if len(symbols) == 1:
-                    flat = _normalize_df_index(raw.dropna())
-                    if len(flat) > 0:
-                        results[symbols[0]] = flat
-
-            return results
-
-        except Exception as e:
-            msg = str(e)
-            if "429" in msg or "rate limit" in msg.lower() or "too many" in msg.lower():
-                backoff = 90 * (attempt + 1)   # 90s → 180s → 270s
-                _set_rate_limit(backoff)
-                _reset_session()
-                _wait_if_rate_limited("batch_retry")
-            elif "401" in msg or "Crumb" in msg or "Unauthorized" in msg:
-                log.warning(f"401 batch attempt {attempt+1} — reset session")
-                _reset_session()
-                time.sleep(8)
-            elif attempt < DL_RETRIES - 1:
-                time.sleep(DL_BACKOFF * (attempt + 1))
-            log.warning(f"dl_batch attempt {attempt+1} {interval} "
-                        f"{len(symbols)} syms: {e}")
-
-    return {}
-
-
 def load_universe() -> list[str]:
     urls = [
         "https://archives.nseindia.com/content/equities/EQUITY_L.csv",
@@ -971,80 +892,30 @@ def run_gap_scan(stocks: list[str]) -> list[dict]:
 # BATCH RUNNERS
 # ================================================================
 def run_eod_update(stocks: list[str]):
-    """
-    Update 1d/1wk/1mo for all stocks using METHOD4 batch downloads.
-
-    Instead of 2143 stocks × 3 TFs = 6429 individual HTTP calls,
-    we batch 50 symbols per call → ~43 calls per TF → ~129 total.
-    Groups stocks by their last_date so each batch uses a single
-    start= or period= argument.
-    """
-    # METHOD2+3: shuffle to break alphabetical pattern Yahoo fingerprints
-    stocks = list(stocks)
-    random.shuffle(stocks)
-
-    log.info(f"EOD update (batch): {len(stocks)} stocks × {TF_EOD} "
-             f"| batch={BATCH_SIZE} workers={MAX_WORKERS}")
+    """Update 1d/1wk/1mo for all stocks in parallel."""
+    log.info(f"EOD update: {len(stocks)} stocks × {TF_EOD}")
     t0 = time.time()
-    total_ok = total_skip = total_err = 0
+    ok = err = skip = 0
 
-    for tf in TF_EOD:
-        log.info(f"  ── TF {tf} ──")
-        tf_ok = tf_skip = tf_err = 0
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futs = {ex.submit(update_stock_eod, s): s for s in stocks}
+        done = 0
+        for fut in as_completed(futs):
+            done += 1
+            try:
+                r = fut.result()
+                ok   += r["ok"]
+                skip += r["skip"]
+                err  += r["err"]
+            except Exception:
+                err += 1
+            if done % 200 == 0:
+                elapsed = time.time() - t0
+                eta = (len(stocks) - done) / (done / elapsed) if done > 0 else 0
+                log.info(f"  EOD: {done}/{len(stocks)} | ok={ok} skip={skip} err={err} | "
+                         f"{elapsed:.0f}s elapsed | ETA {eta:.0f}s")
 
-        # Group stocks by their last cached date so each batch can share
-        # a single start= value (stocks updated the same day go in one call)
-        date_groups: dict[str | None, list[str]] = {}
-        for sym in stocks:
-            last = get_last_date(sym, tf)
-            since = last[:10] if last else None
-            date_groups.setdefault(since, []).append(sym)
-
-        log.info(f"    {len(date_groups)} date-groups, "
-                 f"{sum(len(v) for v in date_groups.values())} stocks")
-
-        for since_date, group_syms in date_groups.items():
-            label = since_date or f"full ({HISTORY[tf]})"
-            n_batches = (len(group_syms) + BATCH_SIZE - 1) // BATCH_SIZE
-            log.info(f"    since={label}: {len(group_syms)} stocks "
-                     f"→ {n_batches} batches")
-
-            for i in range(0, len(group_syms), BATCH_SIZE):
-                batch = group_syms[i : i + BATCH_SIZE]
-                try:
-                    if since_date:
-                        data = dl_batch(batch, tf, since_date=since_date)
-                    else:
-                        data = dl_batch(batch, tf, period=HISTORY[tf])
-
-                    for sym, df in data.items():
-                        try:
-                            n = write_cache(sym, tf, df)
-                            tf_ok += 1
-                            log.debug(f"{sym} {tf}: +{n} bars")
-                        except Exception as e:
-                            log.debug(f"{sym} {tf} write err: {e}")
-                            tf_err += 1
-
-                    tf_skip += len(batch) - len(data)
-
-                except Exception as e:
-                    log.warning(f"Batch {tf} {label} [{i}:{i+BATCH_SIZE}]: {e}")
-                    tf_err += len(batch)
-
-                # Progress log every 500 stocks processed
-                processed = i + len(batch)
-                if processed % 500 == 0 or processed >= len(group_syms):
-                    elapsed = time.time() - t0
-                    log.info(f"    {tf} {label}: {processed}/{len(group_syms)} | "
-                             f"ok={tf_ok} skip={tf_skip} err={tf_err} | "
-                             f"{elapsed:.0f}s elapsed")
-
-        log.info(f"  {tf} complete: ok={tf_ok} skip={tf_skip} err={tf_err}")
-        total_ok += tf_ok; total_skip += tf_skip; total_err += tf_err
-
-    log.info(f"EOD done: {time.time()-t0:.1f}s | "
-             f"ok={total_ok} skip={total_skip} err={total_err}")
+    log.info(f"EOD done: {time.time()-t0:.1f}s | ok={ok} skip={skip} err={err}")
 
 def run_intraday_update(stocks: list[str]):
     """Update 15m + 1h for watchlist stocks."""
