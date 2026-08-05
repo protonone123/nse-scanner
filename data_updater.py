@@ -41,8 +41,6 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-import batch_downloader   # resilient multi-symbol batch download mechanism
-
 # ================================================================
 # PATHS
 # ================================================================
@@ -988,60 +986,9 @@ def run_gap_scan(stocks: list[str]) -> list[dict]:
 # ================================================================
 # BATCH RUNNERS
 # ================================================================
-def run_eod_update(stocks: list[str], full_refresh: bool = False):
-    """
-    Update 1d/1wk/1mo for all stocks via the batch downloader.
-
-    Replaces the old per-symbol ThreadPoolExecutor(max_workers=1) loop
-    (still available as update_stock_eod() / _run_eod_update_serial()
-    below for reference / fallback). That loop was forced serial
-    specifically because parallel per-symbol yf.download() calls tripped
-    Yahoo's rate limiter across ~2000+ NSE symbols — reliable but slow
-    (45-60 min) and still lossy on a bad day.
-
-    batch_downloader batches ~50 symbols per yf.download() call (1 HTTP
-    round-trip instead of 50), the same mechanism proven at this
-    universe size in the cup_test scanner's downloader.py. Each of the
-    three EOD timeframes is downloaded as its own batched pass, since
-    yfinance's `interval=` applies per-call and 1wk/1mo have different
-    incremental-start semantics than 1d.
-    """
-    log.info(f"EOD update (batched): {len(stocks)} stocks × {TF_EOD}")
-    t0 = time.time()
-    totals = {}
-
-    for tf in TF_EOD:
-        history_start = {
-            "1d": "2015-01-01", "1wk": "2010-01-01", "1mo": "2005-01-01",
-        }.get(tf, "2015-01-01")
-
-        stats = batch_downloader.run_batch_download(
-            symbols=stocks,
-            get_last_date=lambda sym, _tf=tf: get_last_date(sym, _tf),
-            save_df=lambda sym, df, _tf=tf: write_cache(sym, _tf, df),
-            interval=tf,
-            full_history_start=history_start,
-            full_refresh=full_refresh,
-            log=log,
-        )
-        totals[tf] = stats
-        log.info(f"  {tf}: saved={stats['saved']} failed={len(stats['failed'])} "
-                 f"batches={stats['batches']} ({stats['elapsed_sec']:.0f}s)")
-
-    elapsed = time.time() - t0
-    total_saved = sum(s["saved"] for s in totals.values())
-    total_failed = sum(len(s["failed"]) for s in totals.values())
-    log.info(f"EOD done: {elapsed:.1f}s | saved={total_saved} failed={total_failed}")
-    return totals
-
-
-def _run_eod_update_serial(stocks: list[str]):
-    """
-    Original per-symbol serial fallback (MAX_WORKERS=1). Kept for
-    reference and as a manual escape hatch — call directly if the
-    batch downloader ever needs to be bypassed for debugging.
-    """
-    log.info(f"EOD update (serial fallback): {len(stocks)} stocks × {TF_EOD}")
+def run_eod_update(stocks: list[str]):
+    """Update 1d/1wk/1mo for all stocks in parallel."""
+    log.info(f"EOD update: {len(stocks)} stocks × {TF_EOD}")
     t0 = time.time()
     ok = err = skip = 0
 
@@ -1241,9 +1188,6 @@ def main():
     mode.add_argument("--sectors",    action="store_true", help="Update sector indices")
     mode.add_argument("--stats",      action="store_true", help="Print cache statistics")
     ap.add_argument("--telegram",     action="store_true")
-    ap.add_argument("--full-refresh", action="store_true",
-                     help="Wipe incremental state and redownload full history "
-                          "for --daily/--bootstrap (batch_downloader)")
     args = ap.parse_args()
 
     if args.stats:
@@ -1290,7 +1234,7 @@ def main():
             )
         log.info(f"=== Daily EOD update {_ist()} ===")
         stocks = load_universe()
-        run_eod_update(stocks, full_refresh=args.full_refresh)
+        run_eod_update(stocks)
         update_sectors()
         # Fundamentals fetch disabled (avoids 401 rate limiting)
         return
